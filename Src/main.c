@@ -18,17 +18,23 @@
 
 #include <stdint.h>
 
-static const uint8_t lookup_table[256] = { 1, 2, 3 };
+#define RCC_AHB1ENR          (*(volatile uint32_t *)0x40023830u)
+#define RCC_AHB1ENR_GPIOAEN  (1u << 0)
 
-volatile uint32_t table_index = 7;
-volatile uint32_t table_value;
+#define GPIOA_MODER          (*(volatile uint32_t *)0x40020000u)
+#define GPIOA_MODER5_POS     10u
+#define GPIOA_MODER5_MASK    (3u << GPIOA_MODER5_POS)
+#define GPIO_MODE_OUTPUT     1u
 
 int main(void)
 {
-    table_value = lookup_table[table_index];
+    RCC_AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
 
-    /* Loop forever */
-	for(;;){
+    (void)RCC_AHB1ENR;
 
+    GPIOA_MODER = (GPIOA_MODER & ~GPIOA_MODER5_MASK)
+                | ((GPIO_MODE_OUTPUT << GPIOA_MODER5_POS) & GPIOA_MODER5_MASK);
+
+    for (;;) {
     }
 }
