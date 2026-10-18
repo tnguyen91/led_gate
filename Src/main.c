@@ -26,6 +26,13 @@
 #define GPIOA_MODER5_MASK    (3u << GPIOA_MODER5_POS)
 #define GPIO_MODE_OUTPUT     1u
 
+#define GPIOA_ODR            (*(volatile uint32_t *)0x40020014u)
+#define GPIOA_ODR_ODR5       (1u << 5)
+
+#define SYSCLK_HZ 16000000u
+#define CYCLES_PER_DELAY_PASS 10u
+#define HALF_SECOND_PASSES (SYSCLK_HZ / CYCLES_PER_DELAY_PASS / 2u)
+
 int main(void)
 {
     RCC_AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
@@ -36,5 +43,9 @@ int main(void)
                 | ((GPIO_MODE_OUTPUT << GPIOA_MODER5_POS) & GPIOA_MODER5_MASK);
 
     for (;;) {
+        GPIOA_ODR ^= GPIOA_ODR_ODR5;
+
+        for (volatile uint32_t pass = 0; pass < HALF_SECOND_PASSES; ++pass) {
+        }
     }
 }

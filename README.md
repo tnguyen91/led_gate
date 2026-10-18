@@ -16,12 +16,18 @@ This is a learning record, not a finished project. [LOG.md](LOG.md) records each
 ## Status
 
 | Step | State |
-|---|---|
+| --- | --- |
 | Const placement experiment | Done, measured in the linker's memory report |
-| Turn on GPIOA's clock | Written, not yet checked on hardware |
-| Set PA5 to output | Written, not yet checked on hardware |
-| Toggle LD2 (PA5) | Not started |
-| Delay loop | Not started |
+| Turn on GPIOA's clock | Done, verified by the blink |
+| Set PA5 to output | Done, verified by the blink |
+| Toggle LD2 (PA5) | Done |
+| Busy-wait delay | Done: 10 blinks in 10 s (Debug build) |
+| Remove volatile in an optimized build | Not started |
+| Read MODER back in the debugger | Not started |
+
+## Build and run
+
+Open the folder in VS Code with the STM32CubeIDE for Visual Studio Code extension. Start the "STM32Cube: Launch ST-Link GDB Server" debug configuration: it builds, flashes the board, and stops at `main`. Press Continue, and LD2 blinks once per second.
 
 ## References
 

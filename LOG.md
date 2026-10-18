@@ -30,7 +30,7 @@ The index is `volatile`, so the table is read at run time. The compiler or linke
 Prediction:
 
 | Build | Section | Flash | RAM |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | with `const` | `.rodata` | 256 B | 0 |
 | without `const` | `.data` | 256 B | 256 B |
 
@@ -39,7 +39,7 @@ Without `const`, the initial values still need flash, because RAM is empty at po
 Result, from the linker's memory report:
 
 | Build | RAM | FLASH |
-|---|---|---|
+| --- | --- | --- |
 | with `const` | 1984 B | 1180 B |
 | without `const` | 2240 B | 1180 B |
 | difference | +256 B | 0 |
@@ -111,3 +111,67 @@ AND with the inverted mask: 0 clears bits 11:10, and 1 keeps every other bit. OR
 - Find GPIOA_ODR's offset and write the statement that toggles PA5.
 - Add a delay loop.
 - Flash the board, and read MODER back in the debugger to confirm PA5's mode.
+
+## 2026-10-17: Toggle, delay, and the first blink
+
+### Step 3: toggle PA5
+
+- GPIOA_ODR: offset 0x14 (Table 26). Address: 0x40020000 + 0x14 = 0x40020014. It resets to 0, so every pin starts low.
+- Bit y sets pin y's output level: 1 is high, 0 is low. PA5 is bit 5, so the mask is 1u << 5 = 0x20.
+
+```c
+#define GPIOA_ODR       (*(volatile uint32_t *)0x40020014u)
+#define GPIOA_ODR_ODR5  (1u << 5)
+
+GPIOA_ODR ^= GPIOA_ODR_ODR5;
+```
+
+XOR gives 1 only where the two bits differ. So XOR with 1 flips a bit, and XOR with 0 keeps it. The mask has a 1 only at bit 5, so each pass flips PA5 and leaves the other 31 bits alone.
+
+```text
+operator   mask bit 0   mask bit 1
+OR  |      keep         force 1      set
+AND &      force 0      keep         clear
+XOR ^      keep         flip         toggle
+```
+
+### Step 4: a busy-wait delay
+
+Prediction without a delay: one pass of the loop takes on the order of 10 cycles, so at 16 MHz PA5 flips about 1.6 million times per second. The eye can't follow on and off faster than roughly 50 to 100 times per second, so LD2 would look steadily lit and dimmer, not blinking.
+
+The delay wastes time by counting. For 0.5 s on and 0.5 s off:
+
+- cycles = rate × time = 16,000,000 × 0.5 = 8,000,000 cycles
+- passes = cycles ÷ cycles per pass = 8,000,000 ÷ 10 = 800,000 passes
+
+```c
+#define SYSCLK_HZ               16000000u   /* internal oscillator (HSI) after reset */
+#define CYCLES_PER_DELAY_PASS   10u         /* estimate; measure on hardware */
+#define HALF_SECOND_PASSES      (SYSCLK_HZ / 2u / CYCLES_PER_DELAY_PASS)
+
+for (;;) {
+    GPIOA_ODR ^= GPIOA_ODR_ODR5;
+
+    for (volatile uint32_t pass = 0; pass < HALF_SECOND_PASSES; pass++) {
+    }
+}
+```
+
+The counter is volatile so that every pass has to happen. Without it, the loop has no observable effect, and an optimized build may shrink it or delete it. Debug builds (-O0) don't optimize, so they hide this bug.
+
+### Result
+
+Debug build, flashed through the on-board ST-LINK: LD2 blinks. A phone stopwatch counted 10 blinks in 10 seconds, so the 10-cycles-per-pass estimate held, within what counting by eye can resolve.
+
+### Mistakes and confusions
+
+1. **Counting 1s instead of positions.** "Bit 5" is the sixth position from the right, counting from 0, whatever value it holds. My count landed right only because PA5 happened to be high.
+2. **Cycles vs passes.** I said half a second was 400,000 cycles and 400,000 passes. It's 8,000,000 cycles, and passes = cycles ÷ cycles per pass, so the two numbers can't match.
+3. **Two meanings of "cycle".** A clock cycle is one tick at 16 MHz. One on plus one off is a blink, or a period. The 8,000,000 clock cycles of one wait are all "on" or all "off", not split between them.
+
+Also learned: a comma can't go inside a C number. `3,200,000u` is three numbers, and in a loop condition it compiles silently and the loop runs zero times.
+
+### Next steps
+
+- Remove volatile in an optimized build and watch the blink speed up or vanish.
+- Read GPIOA_MODER back in the debugger to confirm PA5's mode.
