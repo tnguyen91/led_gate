@@ -4,6 +4,10 @@ Bare-metal C on an STM32 Nucleo-F411RE board. No HAL and no generated setup code
 
 This is a learning record, not a finished project. [LOG.md](LOG.md) records each step: what I predicted, what happened, and the mistakes I made.
 
+## Demo
+
+https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
+
 ## Hardware
 
 - NUCLEO-F411RE: STM32F411RE microcontroller (Arm Cortex-M4), with an on-board ST-LINK for flashing and debugging
