@@ -4,7 +4,7 @@ Each entry records what I set out to do, what I predicted, what happened, and th
 
 ## 2026-10-16: Toolchain and const placement
 
-### Setup
+### Experiment setup
 
 Installed STM32CubeIDE for Visual Studio Code and created an empty CMake project for the STM32F411RE. It has ST's startup file and linker script, and no HAL.
 
@@ -163,6 +163,8 @@ The counter is volatile so that every pass has to happen. Without it, the loop h
 
 Debug build, flashed through the on-board ST-LINK: LD2 blinks. A phone stopwatch counted 10 blinks in 10 seconds, so the 10-cycles-per-pass estimate held, within what counting by eye can resolve.
 
+**Correction (2026-10-18):** a 60-second video of the same build counted 51 to 52 blinks, so a pass takes about 11.6 cycles at -O0, not 10. A 10-second count can't resolve that difference. See the 2026-10-18 entry.
+
 ### Mistakes and confusions
 
 1. **Counting 1s instead of positions.** "Bit 5" is the sixth position from the right, counting from 0, whatever value it holds. My count landed right only because PA5 happened to be high.
@@ -171,7 +173,66 @@ Debug build, flashed through the on-board ST-LINK: LD2 blinks. A phone stopwatch
 
 Also learned: a comma can't go inside a C number. `3,200,000u` is three numbers, and in a loop condition it compiles silently and the loop runs zero times.
 
-### Next steps
+### Next steps: first blink
 
 - Remove volatile in an optimized build and watch the blink speed up or vanish.
 - Read GPIOA_MODER back in the debugger to confirm PA5's mode.
+
+## 2026-10-18: What -O2 does to the delay loop
+
+### Setup
+
+The optimization level is how hard the compiler works at making the translated code faster. -O0, used by the Debug build, turns every line of C into its own instructions, in order. -O2 may shorten, merge, reorder, or skip work, as long as the program's result stays the same.
+
+The compiler only has to keep the program's result, which the C standard calls observable behavior. Every read and write of a `volatile` object counts as part of the result. How long the code takes does not, and a busy-wait loop's only product is time.
+
+For this demo only, the first line of main.c was:
+
+```c
+#pragma GCC optimize("O2")
+```
+
+It tells GCC to compile every function below it in main.c at -O2, so the Debug build ran optimized code without touching CMake. It came out afterward.
+
+One change per step. I predicted before every flash and counted blinks from phone video. The instruction counts come from a GCC 13.2 build of the same code; my toolchain is GCC 14.3.1, so only the blink counts are my measurements.
+
+### Results
+
+Steps 1 to 4 ran with the pragma.
+
+| Step | Delay | Counter | Predicted | Result |
+| --- | --- | --- | --- | --- |
+| Baseline, -O0 | inline | `volatile` | | 51 to 52 blinks per minute, about 11.6 cycles per pass |
+| 1 | inline | `volatile` | slightly faster: 7 instructions per pass become 6 | about 60 blinks per minute, 10 cycles per pass |
+| 2 | inline | not `volatile` | faster, about 150 per minute | 34 blinks in 10 s (about 204 per minute), about 3 cycles per pass |
+| 3 | in its own function | not `volatile` | same rate as step 2 | no visible blink, a steady light |
+| 4 | in its own function | `volatile` | about 60 per minute | 20 blinks in 20 s |
+
+From blinks to cycles per pass: one blink is two waits, one wait is 800,000 passes, and the clock runs 16,000,000 cycles per second. At 51.5 blinks per minute, a wait takes 60 ÷ 103 ≈ 0.58 s, which is about 9.3 million cycles, or 11.6 per pass.
+
+What each step showed:
+
+- **Step 1.** `volatile` forces 2 reads and 1 write of `pass` on every pass: one read to compare, then a read and a write for the increment. All 800,000 passes stay. -O2 trims only what isn't protected: at -O0 every pass reloads the limit from flash, and at -O2 the limit stays in a register. 60 ÷ 51.5 ≈ 1.17, and 7 ÷ 6 ≈ 1.17.
+- **Step 2.** Without `volatile`, none of those accesses has to happen. The compiler kept the loop but replaced `pass` with a register counting down: 2 instructions per pass and no memory access. The "half second" became about 0.15 s.
+- **Step 3.** The same loop moved into `static void delay_half_second(void)`, and the compiler deleted it. `main` now toggles LD2 millions of times per second, which looks like a steady light. Stepping through `main` in the debugger alternates between the `for (;;)` line and the XOR line and never stops on the `delay_half_second()` line, because that line has no instructions left.
+- **Step 4.** `volatile` back inside the function brings the blink back at the step 1 rate.
+
+### Takeaways
+
+- A busy-wait counter must be `volatile`. Without it, the compiler may shrink the delay or delete it. Here a harmless-looking refactor flipped it from shrunk to deleted. A Release build or a compiler upgrade can do the same.
+- The C rules say the compiler *may* delete the loop. Whether it does is the compiler's choice: step 2 kept a deletable loop, and step 3 didn't.
+- Even with `volatile`, busy-wait timing depends on the build: about 11.6 cycles per pass at -O0 and 10 at -O2, so `CYCLES_PER_DELAY_PASS` can't be right for both. A hardware timer (SysTick) fixes that.
+
+Also learned: in optimized code, the debugger's highlighted line jumps around. Instructions from different lines get reordered and merged, and a line whose work was removed never gets highlighted.
+
+### Mistakes and confusions
+
+1. **Same result, same speed.** For step 1, I first predicted the same rate, because the result stays the same. Time isn't part of the result, and making code faster is -O2's job.
+2. **Step 3 predicted from step 2.** I assumed the compiler would repeat step 2's countdown. It isn't bound to: C allowed deleting the loop both times.
+3. **Units in the chain.** I wrote that 800,000 passes take 60 seconds. That's one half-second wait. Writing the chain one row at a time fixed it: cycles per wait, then seconds per wait, then two waits per blink.
+4. **Half an answer, again.** "Too fast for the eye" isn't the whole picture. LD2 looks like a steady light, dimmer than fully on, because it's on only about half the time.
+
+### Next steps: optimization
+
+- Read GPIOA_MODER back in the debugger to confirm PA5's mode.
+- Replace the busy-wait with SysTick, so the delay doesn't depend on the build.

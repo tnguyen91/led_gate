@@ -25,13 +25,13 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | Turn on GPIOA's clock | Done, verified by the blink |
 | Set PA5 to output | Done, verified by the blink |
 | Toggle LD2 (PA5) | Done |
-| Busy-wait delay | Done: 10 blinks in 10 s (Debug build) |
-| Remove volatile in an optimized build | Not started |
+| Busy-wait delay | Done: 51 to 52 blinks per minute (Debug build, 60-second video) |
+| Remove volatile in an optimized build | Done: without `volatile`, -O2 shrank the delay or deleted it (see LOG) |
 | Read MODER back in the debugger | Not started |
 
 ## Build and run
 
-Open the folder in VS Code with the STM32CubeIDE for Visual Studio Code extension. Start the "STM32Cube: Launch ST-Link GDB Server" debug configuration: it builds, flashes the board, and stops at `main`. Press Continue, and LD2 blinks once per second.
+Open the folder in VS Code with the STM32CubeIDE for Visual Studio Code extension. Start the "STM32Cube: Launch ST-Link GDB Server" debug configuration: it builds, flashes the board, and stops at `main`. Press Continue, and LD2 blinks a little under once per second.
 
 ## References
 
