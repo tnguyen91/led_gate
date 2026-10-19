@@ -33,6 +33,11 @@
 #define CYCLES_PER_DELAY_PASS 10u
 #define HALF_SECOND_PASSES (SYSCLK_HZ / CYCLES_PER_DELAY_PASS / 2u)
 
+static void delay_half_second(void)
+{
+    for (volatile uint32_t pass = 0; pass < HALF_SECOND_PASSES; pass++) {}
+}
+
 int main(void)
 {
     RCC_AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
@@ -44,8 +49,6 @@ int main(void)
 
     for (;;) {
         GPIOA_ODR ^= GPIOA_ODR_ODR5;
-
-        for (volatile uint32_t pass = 0; pass < HALF_SECOND_PASSES; ++pass) {
-        }
+        delay_half_second();
     }
 }
