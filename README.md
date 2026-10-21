@@ -27,7 +27,8 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | Toggle LD2 (PA5) | Done |
 | Busy-wait delay | Done: 51 to 52 blinks per minute (Debug build, 60-second video) |
 | Remove volatile in an optimized build | Done: without `volatile`, -O2 shrank the delay or deleted it (see LOG) |
-| Read MODER back in the debugger | Not started |
+| Read MODER back in the debugger | Done 2026-10-20: 0xA8000000 before the setup line, 0xA8000400 after; PA5's field 01 (output) |
+| SysTick delay | Not started |
 
 ## Build and run
 

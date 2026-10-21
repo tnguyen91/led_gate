@@ -236,3 +236,46 @@ Also learned: in optimized code, the debugger's highlighted line jumps around. I
 
 - Read GPIOA_MODER back in the debugger to confirm PA5's mode.
 - Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
+
+## 2026-10-20: Reading GPIOA_MODER back in the debugger
+
+### Setup
+
+Debug build (-O0), no pragma. The "STM32Cube: Launch ST-Link GDB Server" configuration stops at `main`, and the peripheral register view shows GPIOA's MODER and its fields. Step Over (F10) runs one source line. The highlighted line is the next line to run: it hasn't run yet.
+
+Reading a field is the mirror of writing one: shift right by the field's position, then AND with its width mask. OR can't pick a field out. For PA5: `(GPIOA_MODER >> GPIOA_MODER5_POS) & 3u`.
+
+### Prediction, worked on paper
+
+| Step | Value |
+| --- | --- |
+| GPIOA_MODER after reset | 0xA8000000 |
+| AND with `~(3u << 10)`, which is 0xFFFFF3FF | 0xA8000000 (bits 11:10 were already 00) |
+| OR with `1u << 10`, which is 0x00000400 | 0xA8000400 |
+| PA5's field: `(0xA8000400 >> 10) & 3u` | 1, output |
+
+### Results
+
+| Point | Predicted | Read |
+| --- | --- | --- |
+| Stopped at `main`, RCC line next | 0xA8000000 | 0xA8000000 |
+| RCC line and read-back done, setup line next | 0xA8000000 | 0xA8000000 |
+| Setup line done | 0xA8000400 | 0xA8000400 |
+| PA5's field (MODER5), setup line done | 01 (output) | 0b01 |
+
+All four matched. The setup line changes only bits 11:10, PA5's mode, from 00 (input) to 01 (output). Bits 31:26 keep their reset value, so PA13, PA14 and PA15 stay in alternate function and the debugger stays connected.
+
+### Open question
+
+At the first point, GPIOA's clock should still be off. Several sources say an unclocked peripheral reads as 0, but the view showed the reset value. Two explanations fit: the chip answered the read without the clock, or the read failed and the view showed a stored reset value. Not yet explained.
+
+### Mistakes and confusions
+
+1. **Shifts written one place short.** I wrote `3u << 10` as 11 followed by nine zeros, which puts the field at bits 10:9. The setup line would then give 0xA8000200: PA5 stays an input, and PA4 becomes alternate function. `x << n` puts exactly n zeros to the right of x, because bit numbers start at 0.
+2. **`~` written at 11 bits.** `~` flips all 32 bits: `~(3u << 10)` is 0xFFFFF3FF. As an 11-bit pattern, the AND would clear everything above bit 10, including the debugger pins.
+3. **MODER 00 read as "off".** 00 is input mode. MODER holds the mode, and ODR holds the level, which only reaches the pin once MODER says output.
+
+### Next steps: read-back
+
+- At the first stop, check GPIOAEN in RCC_AHB1ENR and read 0x40020000 through the Memory Inspector, to settle the open question.
+- Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
