@@ -78,6 +78,8 @@ RCC_AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
 
 The second line reads the register back. After the enable write, the clock can take 2 AHB cycles to start (errata item "Delay after an RCC peripheral clock enabling": ES0299 section 2.2.7 for the sibling STM32F401; ES0287 is the F411's own errata sheet). If the next read of GPIOA_MODER landed too early, it could return 0, and the write-back would turn PA13 and PA14 into inputs and cut off the debugger. ST's HAL does the same read-back.
 
+**Correction (2026-10-21):** the "could return 0" part isn't supported. With GPIOA's clock fully off, a debugger read of GPIOA_MODER returned 0xA8000000, its reset value, not 0 (see the 2026-10-21 entries). The errata asks for the delay but doesn't say what an early access returns, and reads from my own code haven't been tested. The read-back stays.
+
 ### Step 2: make PA5 an output
 
 - GPIOA base: 0x4002 0000 (Table 1). MODER offset: 0x00 (Table 26, GPIO register map).
@@ -194,7 +196,7 @@ For this demo only, the first line of main.c was:
 
 It tells GCC to compile every function below it in main.c at -O2, so the Debug build ran optimized code without touching CMake. It came out afterward.
 
-One change per step. I predicted before every flash and counted blinks from phone video. The instruction counts come from a GCC 13.2 build of the same code; my toolchain is GCC 14.3.1, so only the blink counts are my measurements.
+One change per step. I predicted before every flash and counted blinks from phone video. The instruction counts come from GCC 13.2 and 14.2 builds of the same code, whose delay loops were identical. My toolchain is GCC 14.3.1, so only the blink counts are my measurements.
 
 ### Results
 
@@ -269,6 +271,8 @@ All four matched. The setup line changes only bits 11:10, PA5's mode, from 00 (i
 
 At the first point, GPIOA's clock should still be off. Several sources say an unclocked peripheral reads as 0, but the view showed the reset value. Two explanations fit: the chip answered the read without the clock, or the read failed and the view showed a stored reset value. Not yet explained.
 
+**Answered (2026-10-21):** the chip answered the read without the clock. At the same stop, the Memory Inspector showed GPIOAEN at 0 and read GPIOA_MODER as 0xA8000000. See the 2026-10-21 entries.
+
 ### Mistakes and confusions
 
 1. **Shifts written one place short.** I wrote `3u << 10` as 11 followed by nine zeros, which puts the field at bits 10:9. The setup line would then give 0xA8000200: PA5 stays an input, and PA4 becomes alternate function. `x << n` puts exactly n zeros to the right of x, because bit numbers start at 0.
@@ -278,4 +282,103 @@ At the first point, GPIOA's clock should still be off. Several sources say an un
 ### Next steps: read-back
 
 - At the first stop, check GPIOAEN in RCC_AHB1ENR and read 0x40020000 through the Memory Inspector, to settle the open question.
+- Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
+
+## 2026-10-21: Reading GPIOA with its clock off
+
+### Setup
+
+The 2026-10-20 entry left a question open. At the first stop, GPIOA's clock should be off, yet the peripheral view showed GPIOA_MODER = 0xA8000000. Three explanations fit:
+
+1. GPIOA's clock was already on at that stop.
+2. The chip answers a read of GPIOA even with its clock off.
+3. The view didn't show a live read. It knows each register's reset value from the chip's description file, so a failed read could leave that stored value on screen.
+
+The Memory Inspector separates them. It reads raw memory at an address and stores nothing, so whatever it shows came from the chip. It opens during a debug session from the Command Palette: "Memory: Show Memory Inspector". In its settings, I set MAUs per Group to 4, so each group shows one 32-bit register. The default of 1 shows single bytes.
+
+- RCC_AHB1ENR (0x40023830) tests explanation 1. RCC has no clock gate of its own, so it always answers.
+- GPIOA_MODER (0x40020000) then separates 2 from 3.
+
+Debug build (-O0), same main.c as 2026-10-20. I wrote the predictions down before launching.
+
+### Results
+
+| Reading | Stop | Tool | Predicted | Read |
+| --- | --- | --- | --- | --- |
+| GPIOA_MODER | `main`, RCC line next | Peripheral view | 0xA8000000 | 0xA8000000 |
+| RCC_AHB1ENR (0x40023830) | same | Memory Inspector | 0x00000000 | 0x00000000 |
+| GPIOA_MODER (0x40020000) | same | Memory Inspector | 0xA8000000 | 0xA8000000 |
+| GPIOA_MODER (0x40020000) | setup line next | Memory Inspector | 0xA8000000 | 0xA8000000 |
+
+- GPIOAEN, bit 0 of RCC_AHB1ENR, was 0 at the first stop, so GPIOA's clock was off. Explanation 1 is out.
+- At the same stop, the Memory Inspector read GPIOA_MODER as 0xA8000000. A live read returned the register's value with the clock off: explanation 2.
+- The peripheral view showed the same value, so explanation 3 isn't needed.
+- The last row is the control. By then the clock is on, so that read is live under every explanation.
+
+On this board, a debugger read of GPIOA_MODER works with GPIOA's clock off. Not tested: reads from my own code, writes with the clock off, and other registers and peripherals.
+
+One gap remained: a 0 from RCC_AHB1ENR can't tell a real read from a failed one. The next entry closes it.
+
+### Mistakes and confusions
+
+1. **A stored value in the wrong tool.** My first prediction gave "the pre-filled value from the document" as the reason for a Memory Inspector reading. Only the peripheral view might show a stored value. The Memory Inspector stores nothing.
+2. **Prediction and explanation didn't match.** In my first set, I predicted 0xA8000000 for GPIOA_MODER but picked explanation 3. With GPIOAEN at 0, a live 0xA8000000 is explanation 2. I redid the set before launching.
+3. **One register for the whole peripheral.** I asked whether RCC is always 0 after reset. RCC_AHB1ENR resets to 0, but each register has its own reset value: RCC_CR starts with its oscillator switched on. And not every reset touches the peripherals. A debugger can reset only the CPU core, which leaves them as they were.
+4. **The chip isn't the board.** The chip is the STM32F411RE. The NUCLEO-F411RE is the board around it: the chip, LD2, the buttons, the headers, and the ST-LINK, which has its own microcontroller and talks to the chip over SWD on PA13 and PA14.
+
+## 2026-10-21: Checking the Memory Inspector against known values
+
+### Setup
+
+The previous entry leaned on one reading I couldn't fully trust. RCC_AHB1ENR read 0x00000000 at the first stop, but a failed read, or a display that fills in zeros, would also show 0. A reading only counts as evidence if it could have come out differently, so this run read values that can't be 0.
+
+It also tested a second question. Every Memory Inspector reading came back as a row of four 4-byte groups, even when I asked for 4 bytes. The first group is the register at the address I typed, and each next group starts 4 bytes further on. Were the other three groups real reads?
+
+- RCC_CR (0x40023800): RM0383 section 6.3.1 lists its reset value as 0x0000 XX81, where XX varies by chip. A real read can't be 0.
+- RCC_AHB1ENR (0x40023830), after the RCC line sets bit 0.
+- GPIOA's first four registers, with Length 16: GPIOA_MODER, GPIOA_OTYPER, GPIOA_OSPEEDR, and GPIOA_PUPDR. For port A, RM0383 lists 0xA800 0000, 0x0000 0000, 0x0C00 0000, and 0x6400 0000. The speed and pull values are nonzero because of the debug pins.
+
+Debug build (-O0), same main.c, Memory Inspector at 4 bytes per group. I wrote the predictions down before launching.
+
+### Prediction: RCC_CR isn't its printed reset value
+
+RM0383 lists a register's value at the instant of reset, and some bits change on their own after that. HSIRDY (bit 1 of RCC_CR) is read-only, and hardware sets it once HSI, the internal 16 MHz oscillator, runs steadily. The chip runs on HSI, so by the time it reaches `main`, HSIRDY is 1.
+
+```text
+bit          3   2   1 (HSIRDY)   0 (HSION)
+at reset     0   0   0            1           = 1
+at main      0   0   1            1           = 3
+```
+
+So RCC_CR should read 0x0000XX83, not ...81.
+
+### Results
+
+| Reading | Stop | Address, Length | Predicted | Read |
+| --- | --- | --- | --- | --- |
+| RCC_CR | `main`, RCC line next | 0x40023800, 4 | 0x0000XX83 | 0x00006983 |
+| RCC_AHB1ENR | setup line next | 0x40023830, 4 | 0x00000001 | 0x00000001 |
+| GPIOA, first four registers | setup line next | 0x40020000, 16 | a8000000 00000000 0c000000 64000000 | a8000000 00000000 0c000000 64000000 |
+
+All three matched.
+
+- RCC_CR: XX is HSICAL, a calibration value set at the factory. Mine is 0x69.
+- RCC answers real reads at the first stop, and reads at 0x40023830 show real values. So the previous entry's 0x00000000 was a real read, and GPIOA's clock really was off.
+- GPIOA's four registers read their RM0383 reset values. On the previous run, with Length 4, the same row showed zeros where GPIOA_OSPEEDR and GPIOA_PUPDR read 0x0C000000 and 0x64000000 here. So the Memory Inspector fills a row past the requested Length with zeros that weren't read. Length counts bytes, and only the groups inside it count.
+
+Also learned: likely vs known. Something I reasoned out from the manual or from other readings is only likely. A reading that could have come out differently makes it known. Before this run, "those zeros were filler" was likely; the Length 16 read made it known.
+
+### Mistakes and confusions
+
+1. **The printed reset value as the live value.** My first prediction for RCC_CR was 0x0000XX81, the value as printed. A reset value is a snapshot at the instant of reset, and read-only status bits can change before any code runs.
+2. **The first group isn't offset 0.** I read "the first group" as the peripheral's first register. It's the register at the address I typed. At 0x40023830, group 1 is RCC_AHB1ENR, not RCC_CR.
+3. **Wrong stop, again.** For RCC_AHB1ENR at the second stop, I first gave the first stop's value. By then, the RCC line has set GPIOAEN.
+4. **A match that proves nothing.** I thought a 00000000 group at GPIOA_OTYPER might show a real read, since its reset value is 0. It can't: a real read and filler both show 0.
+5. **One reading vouching for another.** I said the second group of the RCC_CR row was a real read because the first group was. Each group answers for itself. That group is RCC_PLLCFGR, which resets to 0x2400 3010, and it showed 00000000, outside the 4 bytes I asked for. So it was almost certainly filler. A direct read of 0x40023804 would confirm it.
+6. **Address vs value.** I said RCC_CR's address changed. Its address is fixed at 0x40023800; its value changed.
+
+### Next steps: Memory Inspector
+
+- Read RCC_PLLCFGR (0x40023804) directly, to confirm the zero in the RCC_CR row was filler.
+- Byte order: read GPIOA_MODER one byte at a time in the Memory Inspector, and see how four bytes in memory make one 32-bit value.
 - Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
