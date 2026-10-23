@@ -374,7 +374,7 @@ Also learned: likely vs known. Something I reasoned out from the manual or from 
 2. **The first group isn't offset 0.** I read "the first group" as the peripheral's first register. It's the register at the address I typed. At 0x40023830, group 1 is RCC_AHB1ENR, not RCC_CR.
 3. **Wrong stop, again.** For RCC_AHB1ENR at the second stop, I first gave the first stop's value. By then, the RCC line has set GPIOAEN.
 4. **A match that proves nothing.** I thought a 00000000 group at GPIOA_OTYPER might show a real read, since its reset value is 0. It can't: a real read and filler both show 0.
-5. **One reading vouching for another.** I said the second group of the RCC_CR row was a real read because the first group was. Each group answers for itself. That group is RCC_PLLCFGR, which resets to 0x2400 3010, and it showed 00000000, outside the 4 bytes I asked for. So it was almost certainly filler. A direct read of 0x40023804 would confirm it.
+5. **One reading vouching for another.** I said the second group of the RCC_CR row was a real read because the first group was. Each group answers for itself. That group is RCC_PLLCFGR, which resets to 0x2400 3010, and it showed 00000000, outside the 4 bytes I asked for. So it was almost certainly filler. A direct read of 0x40023804 would confirm it. **Confirmed (2026-10-22):** a direct read returned 0x24003010, so it was filler. See the 2026-10-22 entry on RCC_PLLCFGR.
 6. **Address vs value.** I said RCC_CR's address changed. Its address is fixed at 0x40023800; its value changed.
 
 ### Next steps: Memory Inspector
@@ -440,9 +440,18 @@ Big Endian                     000400a8   lowest address first: memory order
 
 ### The display didn't always follow a settings change
 
-Changing Group Endianness alone left the row as it was, twice. Typing the address again redrew it twice and failed once, and clicking Go after a change didn't redraw it either. Clicking "Load 128 more bytes above" and then Go redrew it both times I tried, and so did stepping to a new stop where the bytes had changed. So after a settings change I load more bytes above, click Go, and check the row's shape and value against my prediction.
+Changing Group Endianness didn't redraw the row by itself, twice. What I did next, and whether the row then showed the new setting:
 
-That button also reads the 128 bytes at the addresses just before the one I typed. Some registers change when they're read, such as a UART's data register, so I only use it where nothing in that range does.
+| Next action | Row redrawn |
+| --- | --- |
+| Typed the address again | Yes twice, no once |
+| Clicked Go | No, once |
+| Clicked "Load 128 more bytes above", then Go | Yes, twice |
+| Changed MAUs per Group to 1 and back to 4 | Yes, once |
+
+Each MAUs per Group change redrew the row on its own, using the current Group Endianness. Stepping to a new stop where the bytes had changed also refreshed the row. So after changing Group Endianness, I force a redraw with one of the last two actions, then check the row's shape and value against my prediction.
+
+The Load button also reads the 128 bytes at the addresses just before the one I typed. Some registers change when they're read, such as a UART's data register, so I only use it where nothing in that range does.
 
 ### Mistakes and confusions
 
@@ -454,4 +463,54 @@ That button also reads the 128 bytes at the addresses just before the one I type
 ### Next steps: byte order
 
 - Read RCC_PLLCFGR (0x40023804) directly, one byte per group and as one group under each setting. Its four bytes all differ, and a direct read settles whether the zero in the 2026-10-21 RCC_CR row was filler.
+- Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
+
+## 2026-10-22: Reading RCC_PLLCFGR directly
+
+### Setup
+
+In the 2026-10-21 RCC_CR row, read with Length 4 at 0x40023800, the second group showed 00000000. That group sits at 0x40023804, which is RCC_PLLCFGR. RM0383 lists its reset value as 0x2400 3010, and main.c never writes it, so it should hold that value at every stop. The zero was either filler or a real read that disagrees with the manual. Until something read 0x40023804 directly, "filler" was only likely.
+
+A direct read also makes a fresh byte-order test. The four bytes of 0x24003010 all differ, so each display setting shows something different.
+
+Debug build (-O0), same main.c, Length 4. I wrote the predictions down before reading.
+
+### Prediction
+
+```text
+RCC_PLLCFGR = 0x24003010
+
+step 1, split by bits:
+bits      31:24        23:16        15:8         7:0
+byte      24           00           30           10
+
+step 2, place by address (bits 7:0 at the lowest):
+address   0x40023804   0x40023805   0x40023806   0x40023807
+byte      10           30           00           24
+```
+
+Little Endian writes the four bytes from the highest address down, so it should show 24003010, the register's value. Big Endian writes them from the lowest address up, so it should show 10300024.
+
+### Results
+
+| Display | Predicted | Read |
+| --- | --- | --- |
+| 4 bytes per group, Little Endian | 24003010 | 24003010 |
+| 4 bytes per group, Big Endian | 10300024 | 10300024 |
+| 1 byte per group | 10 30 00 24 | 10 30 00 24 |
+
+All three matched. After I set the gear back, Little Endian read 24003010 again.
+
+- A real read at 0x40023804 returns 0x24003010, not 0. So the 00000000 in the 2026-10-21 row was filler, and that's now known. This read could have come out 00000000, and it didn't.
+- RCC_PLLCFGR sits in memory as 10 30 00 24, with the byte holding bits 7:0 at the lowest address, like RCC_CR and GPIOA_MODER.
+- Little Endian gave the register's value, and Big Endian gave memory order, as with GPIOA_MODER.
+
+### Mistakes and confusions
+
+1. **Likely called known.** Before the read, I called the filler claim known, because the Memory Inspector had shown filler before. That was at GPIOA's addresses, in a different row. One reading can't vouch for another.
+2. **Group 2's address.** I didn't see how a read at 0x40023800 involved RCC_PLLCFGR at 0x40023804. At 4 bytes per group, group 2 starts 4 bytes after the address I typed.
+3. **The display setting run as storing, again.** I first predicted Little Endian as 10300024 and Big Endian as 24003010. My Big Endian rule, least significant byte at the highest address, was right, but I applied it to the value instead of to the bytes in memory. Applied to memory, the byte at the highest address, 24, goes last: 10300024.
+
+### Next steps: direct read
+
 - Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
