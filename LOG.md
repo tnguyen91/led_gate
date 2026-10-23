@@ -382,3 +382,76 @@ Also learned: likely vs known. Something I reasoned out from the manual or from 
 - Read RCC_PLLCFGR (0x40023804) directly, to confirm the zero in the RCC_CR row was filler.
 - Byte order: read GPIOA_MODER one byte at a time in the Memory Inspector, and see how four bytes in memory make one 32-bit value.
 - Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
+
+## 2026-10-22: Byte order in memory
+
+### Setup
+
+A 32-bit register is four bytes, and each byte has its own address: the register's address, then +1, +2, and +3. That's why the next register starts 4 bytes further on. The bytes are numbered 0 to 3 from the bits 7:0 end: byte 0 holds bits 7:0, and byte 3 holds bits 31:24. A byte's address is the register's address plus its number.
+
+Endianness is the rule for which byte goes at the lowest address. Little-endian puts byte 0 there; big-endian puts byte 3 there.
+
+Two Memory Inspector settings decide what a row shows:
+
+- MAUs per Group: at 1, each byte is its own group of 2 hex digits, lowest address on the left. At 4, four bytes make one group of 8 digits.
+- Group Endianness: how a 4-byte group is turned into one number. It changes the display, never memory.
+
+Debug build (-O0), same main.c, Length 4 throughout. RCC_CR is the calibration: its value, 0x00006983, is known from the 2026-10-21 entry, and its low bytes, 83 and 69, differ, so its row shows the order. I wrote the GPIOA_MODER predictions down before launching.
+
+### Prediction: from a value to its bytes in memory
+
+Two steps: split the value by bits, then place each byte by address.
+
+```text
+GPIOA_MODER after the setup line = 0xA8000400
+
+step 1, split by bits:
+bits      31:24        23:16        15:8         7:0
+byte      A8           00           04           00
+
+step 2, place by address (bits 7:0 at the lowest):
+address   0x40020000   0x40020001   0x40020002   0x40020003
+byte      00           04           00           A8
+```
+
+The bytes move, but the two digits inside each byte don't: A8 stays A8.
+
+### Results
+
+| Register | Stop | Display | Predicted | Read |
+| --- | --- | --- | --- | --- |
+| RCC_CR (0x40023800) | `main`, RCC line next | 1 byte per group | 83 69 00 00 | 83 69 00 00 |
+| GPIOA_MODER (0x40020000) | setup line next | 1 byte per group | 00 00 00 A8 | 00 00 00 a8 |
+| GPIOA_MODER | setup line done | 1 byte per group | 00 04 00 A8 | 00 04 00 a8 |
+| GPIOA_MODER | setup line done | 4 bytes per group, Little Endian | a8000400 | a8000400 |
+| GPIOA_MODER | setup line done | 4 bytes per group, Big Endian | 000400A8 | 000400a8 |
+
+All five matched.
+
+- RCC_CR's row starts with 83, the byte holding bits 7:0. So that byte sits at the lowest address: this chip stores words little-endian.
+- The setup line changed one byte, at 0x40020001, from 00 to 04. That byte holds bits 15:8, which include PA5's mode field, bits 11:10.
+- Group Endianness changes only how the tool turns four bytes into one number. Little Endian writes them from the highest address down, which gives the register's value. Big Endian writes them from the lowest address up, which keeps memory order.
+
+```text
+memory, lowest address first   00 04 00 a8
+Little Endian                  a8000400   highest address first: the register's value
+Big Endian                     000400a8   lowest address first: memory order
+```
+
+### The display didn't always follow a settings change
+
+Changing Group Endianness alone left the row as it was, twice. Typing the address again redrew it twice and failed once, and clicking Go after a change didn't redraw it either. Clicking "Load 128 more bytes above" and then Go redrew it both times I tried, and so did stepping to a new stop where the bytes had changed. So after a settings change I load more bytes above, click Go, and check the row's shape and value against my prediction.
+
+That button also reads the 128 bytes at the addresses just before the one I typed. Some registers change when they're read, such as a UART's data register, so I only use it where nothing in that range does.
+
+### Mistakes and confusions
+
+1. **Number order written as the row.** I first wrote GPIOA_MODER's row as A8 00 00 00: the value split into bytes, biggest first, but not placed by address. That's step 1 of 2.
+2. **A hex digit taken for a byte.** For the byte holding PA5's field, I gave bits 11:8. That's one hex digit, 4 bits. The byte is two digits, bits 15:8.
+3. **No method for a byte's address.** I counted bytes from the wrong end and couldn't find a byte's address. Bytes count from the bits 7:0 end, and a byte's address is the register's address plus its number.
+4. **The display setting run as storing.** I predicted the Big Endian group as A8 00 04 00, the value's own byte order. Storing goes from a value into memory. The setting goes the other way: it starts from the bytes in memory and turns them back into a number.
+
+### Next steps: byte order
+
+- Read RCC_PLLCFGR (0x40023804) directly, one byte per group and as one group under each setting. Its four bytes all differ, and a direct read settles whether the zero in the 2026-10-21 RCC_CR row was filler.
+- Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
