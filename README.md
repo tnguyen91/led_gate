@@ -30,7 +30,7 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | Remove volatile in an optimized build | Done: without `volatile`, -O2 shrank the delay or deleted it (see LOG) |
 | Read MODER back in the debugger | Done: 0xA8000000 before the setup line, 0xA8000400 after; PA5's field 01 (output) |
 | Read GPIOA with its clock off | Done: a debugger read of GPIOA_MODER with GPIOAEN = 0 returned 0xA8000000 |
-| Check the Memory Inspector against known values | Done: RCC_CR read 0x00006983 at `main`, RCC_AHB1ENR 0x00000001 after the enable, and GPIOA's first four registers their reset values |
+| Check the Memory Inspector against known values | Done: RCC_CR read 0x00006983 at `main` and RCC_AHB1ENR 0x00000001 after the enable; RCC_PLLCFGR and GPIOA's first four registers read their reset values |
 | Byte order in memory | Done: GPIOA_MODER (0xA8000400) sits in memory as 00 04 00 a8, lowest address first, so the byte holding bits 7:0 is at the lowest address (little-endian) |
 | SysTick delay | Not started |
 
