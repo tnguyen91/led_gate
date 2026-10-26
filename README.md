@@ -16,7 +16,7 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 
 - STM32CubeIDE for Visual Studio Code: CMake build with arm-none-eabi-gcc (GNU Tools for STM32 14.3.1+st.2)
 - Empty project: ST's startup file and linker script, no HAL
-- Debugging: ST's peripheral register view, and the Memory Inspector for reading raw memory at an address
+- Debugging: ST's peripheral register view, the Memory Inspector for reading raw memory at an address, and the Watch panel for variables
 
 ## Status
 
@@ -32,15 +32,17 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | Read GPIOA with its clock off | Done: a debugger read of GPIOA_MODER with GPIOAEN = 0 returned 0xA8000000 |
 | Check the Memory Inspector against known values | Done: RCC_CR read 0x00006983 at `main` and RCC_AHB1ENR 0x00000001 after the enable; RCC_PLLCFGR and GPIOA's first four registers read their reset values |
 | Byte order in memory | Done: GPIOA_MODER (0xA8000400) sits in memory as 00 04 00 a8, lowest address first, so the byte holding bits 7:0 is at the lowest address (little-endian) |
-| SysTick delay | Not started |
+| SysTick delay | Done: a 1 ms SysTick tick drives `delay_ms()`; 60 blinks per minute in the Debug build and with `#pragma GCC optimize("O2")` |
+| Remove volatile from the tick counter at -O2 | Done: LD2 stuck on while `elapsed_ms` kept climbing (see LOG) |
 
 ## Build and run
 
-Open the folder in VS Code with the STM32CubeIDE for Visual Studio Code extension. Start the "STM32Cube: Launch ST-Link GDB Server" debug configuration: it builds, flashes the board, and stops at `main`. Press Continue, and LD2 blinks a little under once per second.
+Open the folder in VS Code with the STM32CubeIDE for Visual Studio Code extension. Start the "STM32Cube: Launch ST-Link GDB Server" debug configuration: it builds, flashes the board, and stops at `main`. Press Continue, and LD2 blinks once per second, timed by SysTick.
 
 ## References
 
 - RM0383: STM32F411xC/E reference manual (registers and memory map)
 - UM1724: STM32 Nucleo-64 boards user manual (board wiring)
+- PM0214: STM32 Cortex-M4 programming manual (SysTick, exceptions, and the vector table)
 
-Both are free PDFs from st.com.
+All three are free PDFs from st.com.

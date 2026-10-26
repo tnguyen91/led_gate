@@ -514,3 +514,89 @@ All three matched. After I set the gear back, Little Endian read 24003010 again.
 ### Next steps: direct read
 
 - Replace the busy-wait with SysTick, so the delay doesn't depend on the build.
+
+## 2026-10-25: SysTick delay
+
+### Setup
+
+The busy-wait's timing depended on the build: about 11.6 cycles per pass at -O0 and 10 at -O2, so `CYCLES_PER_DELAY_PASS` couldn't be right for both (2026-10-18). SysTick replaces it. SysTick is a 24-bit timer that counts down, built into the Cortex-M4 core. It isn't an STM32 peripheral, so it needs no RCC clock enable. It counts clock cycles in hardware, so the build can't change its period.
+
+PM0214, ST's Cortex-M4 programming manual, documents SysTick in section 4.5. The addresses and bit positions below match Arm's CMSIS header `core_cm4.h`.
+
+| Register | Address | What it holds |
+| --- | --- | --- |
+| STK_CTRL | 0xE000E010 | The switches. ENABLE (bit 0) turns counting on, TICKINT (bit 1) runs the handler each time the count reaches 0, and CLKSOURCE (bit 2) selects the processor clock, 16 MHz after reset |
+| STK_LOAD | 0xE000E014 | RELOAD, in bits 23:0: the number each countdown starts from |
+| STK_VAL | 0xE000E018 | The current count. Writing any value clears it |
+
+- The count shows RELOAD, RELOAD - 1, and so on down to 0, one number per cycle, so one period is RELOAD + 1 cycles. A 1 ms period at 16 MHz is 16,000 cycles, so RELOAD is 15,999. RELOAD has 24 bits, so its largest value is 0x00FFFFFF.
+- Setup is three writes, in order: STK_LOAD; then STK_VAL = 0, so the first countdown starts from RELOAD; then STK_CTRL with all three switches on. STK_CTRL goes last because it starts everything.
+- Each time the count reaches 0, the CPU pauses `main`, reads entry 15 of the vector table, runs `SysTick_Handler`, and then resumes `main` where it stopped. The startup file from ST declares a weak `SysTick_Handler` that points to `Default_Handler`, an infinite loop. A function with exactly that name replaces it.
+- The handler adds 1 to `elapsed_ms`, so it counts milliseconds since setup. `static` keeps other files from changing it. `volatile` makes `main` re-read it: `main` never calls the handler, so without `volatile` the compiler sees no write and can reuse its first read. Other files read the count through `millis()`.
+- `delay_ms()` saves the start time and waits while `millis() - start < ms`. Unsigned subtraction wraps modulo 2^32, like the counter, so the difference stays right when the counter rolls over, after about 49.7 days. Comparing `millis() < start + ms` would break near the wrap: `start + ms` can wrap to a small number and end the wait at once.
+
+```c
+#define STK_CTRL             (*(volatile uint32_t *)0xE000E010u)
+#define STK_CTRL_ENABLE      (1u << 0)
+#define STK_CTRL_TICKINT     (1u << 1)
+#define STK_CTRL_CLKSOURCE   (1u << 2)
+#define STK_LOAD             (*(volatile uint32_t *)0xE000E014u)
+#define STK_VAL              (*(volatile uint32_t *)0xE000E018u)
+
+#define SYSCLK_HZ               16000000u            /* internal oscillator (HSI) after reset */
+#define SYSTICK_PERIOD_CYCLES   (SYSCLK_HZ / 1000u)  /* 1 ms */
+#define BLINK_HALF_PERIOD_MS    500u
+
+static volatile uint32_t elapsed_ms;
+
+void SysTick_Handler(void)
+{
+    elapsed_ms++;
+}
+
+uint32_t millis(void)
+{
+    return elapsed_ms;
+}
+
+static void systick_start_1ms(void)
+{
+    STK_LOAD = SYSTICK_PERIOD_CYCLES - 1u;
+    STK_VAL = 0u;
+    STK_CTRL = STK_CTRL_ENABLE | STK_CTRL_TICKINT | STK_CTRL_CLKSOURCE;
+}
+
+static void delay_ms(uint32_t ms)
+{
+    uint32_t start = millis();
+    while ((millis() - start) < ms) {
+    }
+}
+```
+
+In `main`, `systick_start_1ms()` runs after the MODER line, and the loop calls `delay_ms(BLINK_HALF_PERIOD_MS)` where the busy-wait used to be.
+
+Debug build (-O0) unless noted. The pragma build used `#pragma GCC optimize("O2")` as the first line of main.c, as on 2026-10-18, and it came out afterward. I wrote the predictions down before each flash.
+
+### Results
+
+| Build | Predicted | Result |
+| --- | --- | --- |
+| Debug (-O0) | 60 blinks per minute | 60 blinks per minute |
+| `#pragma GCC optimize("O2")` | 60 blinks per minute | 60 blinks per minute |
+| Pragma, with `volatile` deleted from `elapsed_ms` | Steady light; `elapsed_ms` unchanged between two pauses | Steady light; `elapsed_ms` read 3281, then 5156; paused, the CPU was in the `while` loop of `delay_ms` |
+
+- The busy-wait gave 51 to 52 blinks per minute at -O0 and about 60 at -O2 (2026-10-18). SysTick gave 60 in both builds.
+- In the third run, the handler kept counting: 1,875 more ticks between the two pauses. `main` never saw them. Without `volatile`, the compiler can assume the counter doesn't change during the wait, so `millis() - start` stays 0 and the wait never ends. LD2 stayed on because the first XOR ran before the first wait. `volatile` went back in afterward.
+
+### Mistakes and confusions
+
+1. **RELOAD kept fixed.** For a 1 ms period, I first kept STK_LOAD at 3 and worked out how many 4-cycle periods fit in 1 ms. RELOAD is the setting I choose so that one period lasts the whole 16,000 cycles.
+2. **Off by one.** Then I put 16,000 in STK_LOAD. The count runs from 16,000 down to 0, which is 16,001 numbers, so every period would run one cycle long. The rule is RELOAD = cycles - 1.
+3. **volatile explained by its definition.** I said `volatile` "guarantees each read/write occurs." That's what it does, not why `elapsed_ms` needs it. The reason is that the handler changes it and `main` never calls the handler.
+4. **Keywords.** I wrote `volatile static`, but C calls a storage-class keyword anywhere but first obsolescent, so it's `static volatile`. I also put `static` on `millis()`, which would have made the read function private to main.c.
+5. **The skipped-write model.** For a flag set in a handler, I said the write "got skipped." The handler is kept, and its write lands in memory; what the optimizer drops is `main`'s re-reads. My prediction for the third run still assumed the counter wouldn't change, and the board showed it climbing.
+
+### Next steps: SysTick
+
+- Drive LD2 through GPIOA_BSRR (offset 0x18), which sets or resets a pin in one write, so an interrupt can't land inside a read-modify-write.
