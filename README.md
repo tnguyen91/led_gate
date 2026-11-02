@@ -34,6 +34,7 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | Byte order in memory | Done: GPIOA_MODER (0xA8000400) sits in memory as 00 04 00 a8, lowest address first, so the byte holding bits 7:0 is at the lowest address (little-endian) |
 | SysTick delay | Done: a 1 ms SysTick tick drives `delay_ms()`; 60 blinks per minute in the Debug build and with `#pragma GCC optimize("O2")` |
 | Remove volatile from the tick counter at -O2 | Done: LD2 stuck on while `elapsed_ms` kept climbing (see LOG) |
+| Where variables live | Done: in the Debug build, `&elapsed_ms` read 0x200001B8 (`.bss`, near the bottom of RAM) and `&start` read 0x2001FFEC (stack, 20 bytes below the top) |
 
 ## Build and run
 
