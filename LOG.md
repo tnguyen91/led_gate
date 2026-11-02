@@ -600,3 +600,44 @@ Debug build (-O0) unless noted. The pragma build used `#pragma GCC optimize("O2"
 ### Next steps: SysTick
 
 - Drive LD2 through GPIOA_BSRR (offset 0x18), which sets or resets a pin in one write, so an interrupt can't land inside a read-modify-write.
+
+## 2026-10-28: Where variables live
+
+### Setup
+
+The compiler sorts code and variables into sections, and the linker script places each section in flash or in RAM. Flash keeps its contents with the power off, but my code can't change it with an ordinary store. RAM can be written in one instruction, but at power-up it holds nothing I can count on.
+
+| Section or region | What goes there | Where it lives |
+| --- | --- | --- |
+| `.text` | Code | Flash |
+| `.rodata` | `const` data and string literals | Flash |
+| `.data` | Globals and statics that start at a nonzero value | RAM, with the starting values kept in flash |
+| `.bss` | Globals and statics that start at 0, with no initializer or `= 0` | RAM only |
+| Stack | Locals, return addresses, saved registers | RAM, from the top down |
+| Heap | Blocks from `malloc` | RAM, from the end of `.bss` up |
+
+- Before `main`, `Reset_Handler` in the startup file (`Src/startup_stm32f411xx.S`, from ST) runs two loops. `CopyDataInit` copies `.data`'s starting values from flash into RAM word by word, so flash has to keep every one of them, zeros included. `FillZerobss` writes zeros over `.bss` and needs only its start and end addresses, so `.bss` takes no flash.
+- At reset, the CPU loads the stack pointer from entry 0 of the vector table: `_estack`, which the linker script (`stm32f411xe_flash.ld`) sets to the end of RAM, 0x20020000. Each function call moves the stack pointer down to make room for a frame.
+- `elapsed_ms` is `static volatile uint32_t` with no initializer, so it starts at 0 and goes in `.bss`. `start` in `delay_ms` is a local, so it's on the stack.
+
+I read both addresses in the Debug build (-O0): a breakpoint on the `while` line in `delay_ms`, Continue, then `&elapsed_ms` and `&start` in the Watch panel, at the first stop. I wrote the predictions down first.
+
+### Results
+
+| Expression | Predicted | Read |
+| --- | --- | --- |
+| `&elapsed_ms` | Near the bottom of RAM (0x20000000), in `.bss` | 0x200001B8 |
+| `&start` | On the stack | 0x2001FFEC |
+
+- `elapsed_ms` sits 0x1B8 = 440 bytes above the start of RAM. It's main.c's only variable outside the stack, so the 440 bytes below it belong to other files: `syscall.c`, `sysmem.c`, or the libraries the build links. The build's map file would say which.
+- `start` sits 20 bytes below the top of RAM, 0x20020000. In the -O0 code, `main` saves 8 bytes of registers, and `delay_ms` saves 8 more and reserves 16 for its locals, with `start` 12 bytes into those 16: 0x20020000 - 8 - 8 - 16 + 12 = 0x2001FFEC.
+- Both values read 0: the breakpoint hit before SysTick's first tick.
+
+### Mistakes and confusions
+
+1. **What instead of why.** I said `.data` values are stored in flash and copied to RAM, and that `elapsed_ms` is zero-initialized. The why: these variables change, so they live in RAM, and RAM holds nothing at power-up, so the starting values are kept in flash. For `.bss`, the startup loop writes the zeros itself, so there's nothing to keep.
+2. **Stack or heap.** I wasn't sure what decides it. The declaration does: a local without `static` goes on the stack, and only `malloc` puts anything on the heap. A pointer to a heap block is two things in two places: the pointer where it's declared, and the block on the heap.
+
+### Next steps: memory layout
+
+- Find what takes the 440 bytes below `elapsed_ms` in the build's map file, `build/Debug/led_gate.map`.
