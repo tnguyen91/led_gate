@@ -641,3 +641,44 @@ I read both addresses in the Debug build (-O0): a breakpoint on the `while` line
 ### Next steps: memory layout
 
 - Find what takes the 440 bytes below `elapsed_ms` in the build's map file, `build/Debug/led_gate.map`.
+
+## 2026-11-02: Measuring LD2 with a logic analyzer
+
+### Setup
+
+The program is the SysTick version from 2026-10-25, unchanged: the loop flips PA5, then `delay_ms(500)` waits for 500 ticks of 16,000 HSI cycles each. This time I measured PA5 with a logic analyzer instead of counting blinks.
+
+- **Analyzer:** a HiLetgo 24 MHz, 8-channel USB logic analyzer, read with sigrok PulseView. PulseView found it with its fx2lafw driver, listed as Saleae Logic. On Windows it needed the WinUSB driver, installed with Zadig.
+- **Wiring, with both unplugged:** CH0 to D13 (PA5) on the right-hand Arduino header, and the analyzer's GND under CH7 to the GND socket just above D13. That header runs SCL/D15, SDA/D14, AVDD, GND, D13, so AVDD is one socket from the GND I needed. The analyzer has pins and the board's header has sockets, so each wire is a female-to-female jumper chained to a male-to-male one. Each device has its own USB cable to the PC.
+- **Capture:** 100 kHz and 1 M samples, so 10 seconds with samples 0.01 ms apart. PulseView's Timing decoder on D0 labels the time between neighboring edges, so its labels alternate low time and high time, with a running average.
+
+### Prediction
+
+- High time 500 ms, low time 500 ms, and period 1000 ms (one rising edge to the next): each half of the loop waits 500 ticks.
+- Not exactly 500.000 ms, but very close if the sample rate is high enough.
+
+### Results
+
+| Run | When | All 19 spans | High times only |
+| --- | --- | --- | --- |
+| 1 | Board already running | 500.28 to 500.68 ms, average 500.48 | 500.32 to 500.68 ms |
+| 2 | Right after replugging both cables | 499.90 to 500.63 ms, average 500.31 | 499.98 to 500.54 ms |
+
+- Every span landed within 0.14% of 500 ms, but none at 500.000. Sampling accounts for about 0.01 ms; the spans were up to 0.68 ms off.
+- The code waited exactly 500 ticks every time, so what changed was the length of a tick, which the HSI's speed sets. In run 1 the HSI ran about 0.1% slow. In run 2 the spans slid from about 500.6 ms to about 500.0 ms within 10 seconds: the HSI sped up by about 0.1%, probably as the board warmed up after being replugged.
+- The HSI is an RC oscillator inside the chip. ST trims each chip at the factory (HSICAL, 0x69 on this board) to about ±1% at 25 °C, so both runs are inside spec. Its speed also shifts with temperature and voltage.
+- The analyzer times its samples from its own clock. The maker of its chip specifies a crystal within ±100 ppm: at most about 0.05 ms on 500 ms.
+
+### Open question
+
+The HSI is the likely cause, not a proven one. Running the chip from a crystal-based clock would settle it: on MB1136 C-02 and later boards, the ST-LINK supplies a fixed 8 MHz clock (UM1724, section 6.7.1). My prediction for that run: 500.00 ms within about 0.1 ms, with little spread.
+
+### Mistakes and confusions
+
+1. **The sample rate as the limit.** I predicted the readings would get very close to 500.000 ms if the sample rate were high enough. The sample rate only decides how precisely the analyzer sees when PA5 flips. The board's clock decides when it flips, and that's where the difference from 500 ms came from.
+2. **A signal wire on an unpowered board.** With only the analyzer plugged in, connecting CH0 to D13 made LD2 glow faintly. With nothing attached, the analyzer's inputs read 1, probably through pull-up resistors inside it, and that fed a little current into PA5 and LD2. The signal wire goes on only while both are powered.
+
+### Next steps: logic analyzer
+
+- Capture the UART shell's frames with the same setup.
+- Optional: the crystal-clock run above.

@@ -11,6 +11,7 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 ## Hardware
 
 - NUCLEO-F411RE: STM32F411RE microcontroller (Arm Cortex-M4), with an on-board ST-LINK for flashing and debugging
+- HiLetgo 24 MHz, 8-channel USB logic analyzer, read with sigrok PulseView
 
 ## Toolchain
 
@@ -35,6 +36,7 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | SysTick delay | Done: a 1 ms SysTick tick drives `delay_ms()`; 60 blinks per minute in the Debug build and with `#pragma GCC optimize("O2")` |
 | Remove volatile from the tick counter at -O2 | Done: LD2 stuck on while `elapsed_ms` kept climbing (see LOG) |
 | Where variables live | Done: in the Debug build, `&elapsed_ms` read 0x200001B8 (`.bss`, near the bottom of RAM) and `&start` read 0x2001FFEC (stack, 20 bytes below the top) |
+| Measure LD2 with a logic analyzer | Done: high time 499.98 to 500.68 ms against 500 ms, over two 10-second captures at 100 kHz; the internal oscillator (HSI) ran about 0.1% off (see LOG) |
 
 ## Build and run
 
