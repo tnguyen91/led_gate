@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <string.h>
 
 #define RCC_AHB1ENR          (*(volatile uint32_t *)0x40023830u)
 #define RCC_AHB1ENR_GPIOAEN  (1u << 0)
@@ -50,6 +51,8 @@
 #define USART2_BAUD 115200u
 #define USART2_CYCLES_PER_BIT ((PCLK1_HZ + (USART2_BAUD / 2u)) / USART2_BAUD)
 
+#define LINE_BUFFER_SIZE 32u
+#define ASCII_DEL 127u
 static volatile uint32_t elapsed_ms;
 
 void SysTick_Handler(void)
@@ -110,6 +113,27 @@ static char usart2_read_byte(void)
     return (char)USART2_DR;
 }
 
+static void run_command(const char *line)
+{
+    if (strcmp(line, "led") == 0) {
+        GPIOA_ODR ^= GPIOA_ODR_ODR5;
+        if ((GPIOA_ODR & GPIOA_ODR_ODR5) != 0u) {
+            usart2_write_string("LD2 ON\r\n");
+        }
+        else {
+            usart2_write_string("LD2 OFF\r\n");
+        }
+    }
+    else if (strcmp(line, "help") == 0) {
+        usart2_write_string("Commands: led, help\r\n");
+    }
+    else if (line[0] != '\0') {
+        usart2_write_string("Unknown command: ");
+        usart2_write_string(line);
+        usart2_write_string("\r\n");
+    }
+}
+
 int main(void)
 {
     RCC_AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
@@ -126,12 +150,28 @@ int main(void)
 
     systick_start_1ms();
 
+    char line[LINE_BUFFER_SIZE];
+    uint32_t line_length = 0u;
+
+    usart2_write_string("> ");
     for (;;) {
         char typed = usart2_read_byte();
         if (typed == '\r') {
             usart2_write_string("\r\n");
+            line[line_length] = '\0';
+            run_command(line);
+            line_length = 0u;
+            usart2_write_string("> ");
         }
-        else {
+        else if ((typed == '\b') || (typed == ASCII_DEL)) {
+            if (line_length > 0u) {
+                line_length--;
+                usart2_write_string("\b \b");
+            }
+        }
+        else if (line_length < (LINE_BUFFER_SIZE - 1u)) {
+            line[line_length] = typed;
+            line_length++;
             usart2_write_byte(typed);
         }
     }
