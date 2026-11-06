@@ -869,3 +869,97 @@ Debug build (-O0). I worked out the prediction before running the test.
 - Add a line buffer and three commands: `led` to toggle LD2, `help` to list the commands, and `millis` to print the milliseconds since reset.
 - Receive by interrupt into a ring buffer, so bytes aren't lost while the loop is busy.
 - Capture the frames with the logic analyzer and PulseView's UART decoder.
+
+## 2026-11-06: A line buffer and the first commands
+
+### Setup
+
+- The loop now collects typed letters in `line`, a 32-byte array, and `line_length` counts them. Enter ends the line, and `run_command` runs it as a command.
+- Both are declared before the loop, so they keep their values from one byte to the next. They're locals in `main`, so they live on the stack, like `start` in the old `delay_ms`. `main` never returns, so they're never freed.
+- A letter is stored only while there's room: `line_length < LINE_BUFFER_SIZE - 1u`. That keeps the last byte free for the `\0`. Without the check, the 33rd letter would land past the end of `line`, in whatever sits next to it on the stack: a buffer overflow. With `< LINE_BUFFER_SIZE` instead, 32 letters would fit, and Enter would write `\0` to `line[32]`, one byte past the end: an off-by-one.
+- The compiler doesn't catch a missing check here, because the index is only known while the program runs. With the check removed, GCC 14.2 compiles it without a warning, even with -Wall -Wextra -Wpedantic at -O2. Like the wrong-register bug on 2026-11-04, a clean build doesn't mean it's right.
+- Enter writes `\0` after the last letter. That makes `line` a C string: letters followed by the `\0` that `usart2_write_string` stops at. `run_command` compares it with each command name using `strcmp`, which returns 0 on a match. `strcmp` is declared in `<string.h>` and comes from the C library the build already links (`-lc`).
+- `led` is the XOR line from the 2026-10-17 blink, now run once per command instead of in the blink loop. It then reads ODR back, so the reply reports LD2's new state.
+- A terminal's Backspace key sends `\b` (8) or DEL (127), depending on its settings, so the code takes both. Backspace drops the last letter from `line` and sends `\b \b`: back up one, overwrite the letter with a space, back up again. On an empty line it does nothing, so it can't erase the prompt.
+
+```c
+#define LINE_BUFFER_SIZE 32u
+#define ASCII_DEL 127u
+```
+
+```c
+static void run_command(const char *line)
+{
+    if (strcmp(line, "led") == 0) {
+        GPIOA_ODR ^= GPIOA_ODR_ODR5;
+        if ((GPIOA_ODR & GPIOA_ODR_ODR5) != 0u) {
+            usart2_write_string("LD2 ON\r\n");
+        }
+        else {
+            usart2_write_string("LD2 OFF\r\n");
+        }
+    }
+    else if (strcmp(line, "help") == 0) {
+        usart2_write_string("Commands: led, help\r\n");
+    }
+    else if (line[0] != '\0') {
+        usart2_write_string("Unknown command: ");
+        usart2_write_string(line);
+        usart2_write_string("\r\n");
+    }
+}
+```
+
+In `main`, the line buffer replaces the echo loop:
+
+```c
+    char line[LINE_BUFFER_SIZE];
+    uint32_t line_length = 0u;
+
+    usart2_write_string("> ");
+    for (;;) {
+        char typed = usart2_read_byte();
+        if (typed == '\r') {
+            usart2_write_string("\r\n");
+            line[line_length] = '\0';
+            run_command(line);
+            line_length = 0u;
+            usart2_write_string("> ");
+        }
+        else if ((typed == '\b') || (typed == ASCII_DEL)) {
+            if (line_length > 0u) {
+                line_length--;
+                usart2_write_string("\b \b");
+            }
+        }
+        else if (line_length < (LINE_BUFFER_SIZE - 1u)) {
+            line[line_length] = typed;
+            line_length++;
+            usart2_write_byte(typed);
+        }
+    }
+```
+
+Debug build (-O0). I worked out the predictions before running the tests.
+
+### Results
+
+| Check | Predicted | Result |
+| --- | --- | --- |
+| `led`, right after a start | `LD2 ON` | `LD2 ON`, and LD2 lit |
+| More than 31 letters, no Enter | Only the first 31 appear | Only the first 31 appeared |
+| Then Enter | `Unknown command:` and the 31 letters | `Unknown command:` and the 31 letters |
+
+- The first `led` said ON because ODR resets to 0, so LD2 starts off and the first XOR turns it on.
+- The reply stopped at letter 31 because Enter wrote `\0` to `line[31]`, the array's last byte, and `usart2_write_string` stops at `\0`. The letters after the 31st were read from DR and stored nowhere, so nothing could bring them back.
+- The rest of the run: `help` printed `Commands: led, help`. A second `led` printed `LD2 OFF`, and LD2 went dark. `ld2 on` came back as `Unknown command: ld2 on`, because the space is stored like any letter and `strcmp` compares the whole line. Backspace fixed a typo.
+
+### Mistakes and confusions
+
+1. **`\0` as the end-of-line character.** I called it that. It's the null terminator, which ends the string. The line ends with the `\r` that Enter sends, and the loop writes `\0` when it sees `\r`.
+
+### Next steps: UART shell
+
+- Add `millis`, which prints the milliseconds since reset.
+- Receive by interrupt into a ring buffer, so bytes aren't lost while the loop is busy.
+- Capture the frames with the logic analyzer and PulseView's UART decoder.
