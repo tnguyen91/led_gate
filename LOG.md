@@ -682,3 +682,190 @@ The HSI is the likely cause, not a proven one. Running the chip from a crystal-b
 
 - Capture the UART shell's frames with the same setup.
 - Optional: the crystal-clock run above.
+
+## 2026-11-04: USART2's clock and pins
+
+### Setup
+
+This starts a bare-metal UART command shell: the board will take commands typed in a terminal on the PC and answer them. The first step gives USART2 its clock and its pins.
+
+USART2's pins, PA2 (TX) and PA3 (RX), go to the ST-LINK by default, not to the D0 and D1 sockets: solder bridges SB13 and SB14 are on (UM1724, section 6.8). The ST-LINK passes the bytes to the PC over the USB cable I flash with, as a virtual COM port. So nothing extra is wired.
+
+| Register | Address | What I set |
+| --- | --- | --- |
+| RCC_APB1ENR | 0x40023840 | USART2EN (bit 17), USART2's clock. USART2 is on the APB1 bus, so its enable is here, not in RCC_AHB1ENR with GPIOA's |
+| GPIOA_AFRL | 0x40020020 | 4 bits per pin pick which peripheral drives it: AF7, USART2, for PA2 (bits 11:8) and PA3 (bits 15:12) |
+| GPIOA_MODER | 0x40020000 | 10, alternate function, for PA2 (bits 5:4) and PA3 (bits 7:6), so a peripheral drives the pins instead of ODR |
+
+- These are the same steps as PA5's setup for LD2: turn on the clock, pick the peripheral, set the pin's mode. PA5 skipped the middle step, because in output mode my code drives the pin through ODR.
+- The clock goes first, read back as for GPIOA. AFRL goes before MODER, so each pin is already routed to USART2 when MODER hands it over. ST's HAL uses the same order.
+- Each AFRL and MODER statement is the MODER5 statement with new names: clear the pin's field, then OR in the new value.
+
+```c
+static void usart2_init(void)
+{
+    RCC_APB1ENR |= RCC_APB1ENR_USART2EN;
+    (void)RCC_APB1ENR; // same errata wait as GPIOA's
+
+    GPIOA_AFRL = (GPIOA_AFRL & ~GPIOA_AFRL2_MASK)
+                | ((GPIO_AF_USART2 << GPIOA_AFRL2_POS) & GPIOA_AFRL2_MASK);
+    GPIOA_AFRL = (GPIOA_AFRL & ~GPIOA_AFRL3_MASK)
+                | ((GPIO_AF_USART2 << GPIOA_AFRL3_POS) & GPIOA_AFRL3_MASK);
+
+    GPIOA_MODER = (GPIOA_MODER & ~GPIOA_MODER2_MASK)
+                | ((GPIO_MODE_ALTERNATE << GPIOA_MODER2_POS) & GPIOA_MODER2_MASK);
+    GPIOA_MODER = (GPIOA_MODER & ~GPIOA_MODER3_MASK)
+                | ((GPIO_MODE_ALTERNATE << GPIOA_MODER3_POS) & GPIOA_MODER3_MASK);
+}
+```
+
+In `main`, `usart2_init()` runs after the PA5 setup, and the blink loop is unchanged.
+
+Debug build (-O0). I read the registers in the Memory Inspector at a breakpoint on `systick_start_1ms()`, after `usart2_init()` had run. I worked out the predictions before flashing.
+
+### Results
+
+| Check | Predicted | Read |
+| --- | --- | --- |
+| RCC_APB1ENR, first build | 0x00020000 | 0x00000000 |
+| RCC_APB1ENR, after the fix | 0x00020000 | 0x00020000 |
+| GPIOA_MODER | 0xA80004A0 | 0xA80004A0 |
+| GPIOA_AFRL | 0x00007700 | 0x00007700 |
+
+- **The first RCC_APB1ENR reading was 0.** MODER and AFRL were right, and `usart2_init` writes them right after the RCC line, so the function had run and the RCC write had gone somewhere else. The line read `RCC_AHB1ENR |= RCC_APB1ENR_USART2EN;`. It set bit 17 of RCC_AHB1ENR, which is reserved, and RCC_APB1ENR's define was missing. It compiled because a mask is only a number: nothing but its name ties `RCC_APB1ENR_USART2EN` to its register. GPIO setup needs only GPIOA's clock, so the pins came out right either way.
+- In MODER, 0xA80004A0 puts 10 in both PA2's and PA3's fields and keeps PA5's 01. In AFRL, 0x00007700 is a 7 in PA3's field and a 7 in PA2's.
+
+### Mistakes and confusions
+
+1. **USART2's clock in the wrong register.** I wrote the enable as `RCC_AHB1ENR |= RCC_APB1ENR_USART2EN;` and never defined RCC_APB1ENR. My mask names start with their register's name, so in a `REG |= MASK` line the two prefixes should match. Here they didn't.
+2. **AFRL's fields.** I put a single 7 at bits 7:4, where MODER keeps PA2 and PA3 together. AFRL gives each pin its own 4 bits, PA2 at 11:8 and PA3 at 15:12, so the value is 0x00007700.
+
+### Next steps: UART shell
+
+- Set USART2's baud rate, switch it on, and send a first line of text.
+
+## 2026-11-05: A banner at 115200 baud
+
+### Setup
+
+A UART sends one bit at a time on one wire per direction, with no clock wire. The line rests at 1. Each byte goes out as a frame: a start bit (0), 8 data bits with the least significant first, and a stop bit (1). That's 8N1: 8 data bits, no parity, 1 stop bit, so each byte costs 10 bits on the wire. At 115200 baud, a bit lasts about 8.68 µs and a frame 86.8 µs, so the line carries at most 11,520 bytes a second.
+
+With no clock wire, both ends have to be set to the same baud rate beforehand. The receiver starts timing at each start bit's falling edge and reads each bit near its middle, by its own clock. So clock error builds up only within one frame, and the two clocks only need to agree within a few percent: about ±3.3% in total for 8N1, by Analog Devices' estimate ("Determining Clock Accuracy Requirements for UART Communications").
+
+| Register | Address | What it does |
+| --- | --- | --- |
+| USART2_BRR | 0x40004408 | Clock cycles per bit, rounded: 16,000,000 ÷ 115,200 = 138.9, so 139 (0x8B) |
+| USART2_CR1 | 0x4000440C | UE (bit 13) turns USART2 on, TE (bit 3) the transmitter, and RE (bit 2) the receiver. Every other bit stays 0, which means 8N1 |
+| USART2_SR | 0x40004400 | Flags: TXE (bit 7), DR can take the next byte; RXNE (bit 5), a byte has arrived |
+| USART2_DR | 0x40004404 | The byte itself: a write sends it, and a read takes the byte that arrived |
+
+- BRR holds cycles per bit, the way `SYSTICK_PERIOD_CYCLES` holds cycles per tick. Adding half the baud rate before dividing makes the integer division round to the nearest whole number, so it gives 139, not 138.
+- With 139 cycles per bit, the real rate is 16,000,000 ÷ 139 = 115,108 baud, 0.08% slow. Adding the HSI's 0.1% from 2026-11-02 makes about 0.18%, far inside ±3.3%.
+- BRR goes in before CR1, and CR1 goes last because it switches everything on, like STK_CTRL in the SysTick setup.
+- Sending waits for TXE, then writes DR, and writing DR clears TXE. The wait is polling, an empty `while` loop like the one in `delay_ms`. The banner's 19 bytes take about 1.65 ms, and `main` does nothing else while it waits.
+- PC side: PuTTY on Windows, connection type Serial, COM3, 115200 baud, 8 data bits, 1 stop bit, no parity, no flow control.
+
+`usart2_init()` now ends by setting the speed and switching USART2 on:
+
+```c
+    USART2_BRR = USART2_CYCLES_PER_BIT;
+    USART2_CR1 = USART2_CR1_RE | USART2_CR1_TE | USART2_CR1_UE;
+```
+
+The baud rate and the send functions:
+
+```c
+#define PCLK1_HZ SYSCLK_HZ
+#define USART2_BAUD 115200u
+#define USART2_CYCLES_PER_BIT ((PCLK1_HZ + (USART2_BAUD / 2u)) / USART2_BAUD)
+
+static void usart2_write_byte(char byte)
+{
+    while ((USART2_SR & USART2_SR_TXE) == 0u) {
+    }
+    USART2_DR = (uint8_t)byte;
+}
+
+static void usart2_write_string(const char *str)
+{
+    while (*str != '\0') {
+        usart2_write_byte(*str);
+        str++;
+    }
+}
+```
+
+In `main`, `usart2_write_string("Hello from USART2\r\n")` runs right after `usart2_init()`, and the blink loop is unchanged.
+
+Debug build (-O0). I read BRR and CR1 in the Memory Inspector at a breakpoint on the `usart2_write_string` line, then pressed Continue with PuTTY open. I worked out the predictions before flashing.
+
+### Results
+
+| Check | Predicted | Result |
+| --- | --- | --- |
+| USART2_BRR | 0x0000008B | 0x0000008B |
+| USART2_CR1 | 0x0000200C | 0x0000200C |
+| PuTTY at 115200 | The banner, once per start | "Hello from USART2", once per press of the reset button: 13 presses, 13 lines |
+| PuTTY set to 9600 | Garbage | Garbage: a few letters among unprintable blocks |
+
+- At 9600, the PC read each bit 12 times too slowly (115,200 ÷ 9,600), far past the few-percent tolerance, so it misread the bits.
+
+### Mistakes and confusions
+
+1. **Bytes per second.** I divided 115,200 by 8 and got 14,400. The start and stop bits are part of the 115,200, so each byte costs 10 bits: 11,520 bytes a second.
+2. **Drift over a whole message.** I thought a 0.1% clock error would build up over a 100-byte message, and that the receiver would re-read a missed bit. The receiver restarts its timing at every start bit, so drift builds up only within one frame. UART never re-reads or resends a bit: a misread bit just makes a wrong byte.
+3. **A fraction called a percent, and the wrong limit.** For BRR's error I wrote 0.0008%, but the fraction 0.0008 is 0.08%. Then I compared it with the HSI's 0.1% as if that were the limit. The two errors add, and the total is compared with the ±3.3% budget.
+
+### Next steps: UART shell
+
+- Read what I type, and echo it back.
+
+## 2026-11-06: Echo
+
+### Setup
+
+- `usart2_read_byte` is `usart2_write_byte` turned around: it waits for RXNE, then reads DR, and reading DR clears RXNE.
+- The loop echoes each byte. It answers `\r`, which the terminal sends for Enter, with `\r\n`.
+- The blink loop is gone. While it sat in `delay_ms` for 500 ms, it wasn't checking RXNE, so a second byte arriving before the first was read would be lost.
+- PC side: `screen /dev/ttyACM0 115200` in WSL. With the board attached to WSL, the ST-LINK's virtual COM port shows up there as `/dev/ttyACM0`. PuTTY on Windows could open COM3 only after I detached the board from WSL; screen doesn't need that.
+
+```c
+static char usart2_read_byte(void)
+{
+    while ((USART2_SR & USART2_SR_RXNE) == 0u) {
+    }
+    return (char)USART2_DR;
+}
+```
+
+```c
+    for (;;) {
+        char typed = usart2_read_byte();
+        if (typed == '\r') {
+            usart2_write_string("\r\n");
+        }
+        else {
+            usart2_write_byte(typed);
+        }
+    }
+```
+
+Debug build (-O0). I worked out the prediction before running the test.
+
+### Results
+
+| Check | Predicted | Result |
+| --- | --- | --- |
+| Pause in the debugger, type `a`, press Continue | `a` appears after Continue | `a` appeared after Continue |
+
+- With the CPU halted, USART2 kept running. It received `a`, put it in DR, and set RXNE, and the byte waited there until the loop read it. ST's F411 header has debug bits that stop the timers, watchdogs, and RTC while the CPU is halted, and none for any USART.
+
+### Mistakes and confusions
+
+1. **"Everything pauses."** I predicted `a` would show up after Continue because everything was paused. The prediction was right but the reason wasn't: only the CPU pauses. If USART2 had paused too, `a` would never have arrived.
+
+### Next steps: UART shell
+
+- Add a line buffer and three commands: `led` to toggle LD2, `help` to list the commands, and `millis` to print the milliseconds since reset.
+- Receive by interrupt into a ring buffer, so bytes aren't lost while the loop is busy.
+- Capture the frames with the logic analyzer and PulseView's UART decoder.
