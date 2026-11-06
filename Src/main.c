@@ -45,7 +45,6 @@
 
 #define SYSCLK_HZ 16000000u /* internal oscillator (HSI) after reset */
 #define SYSTICK_PERIOD_CYCLES (SYSCLK_HZ / 1000u) /* 1 ms */
-#define BLINK_HALF_PERIOD_MS 500u
 
 #define PCLK1_HZ SYSCLK_HZ
 #define USART2_BAUD 115200u
@@ -104,11 +103,11 @@ static void usart2_write_string(const char *str)
     }
 }
 
-static void delay_ms(uint32_t ms)
+static char usart2_read_byte(void)
 {
-    uint32_t start = millis();
-    while ((millis() - start) < ms) {
+    while ((USART2_SR & USART2_SR_RXNE) == 0u) {
     }
+    return (char)USART2_DR;
 }
 
 int main(void)
@@ -128,7 +127,12 @@ int main(void)
     systick_start_1ms();
 
     for (;;) {
-        GPIOA_ODR ^= GPIOA_ODR_ODR5;
-        delay_ms(BLINK_HALF_PERIOD_MS);
+        char typed = usart2_read_byte();
+        if (typed == '\r') {
+            usart2_write_string("\r\n");
+        }
+        else {
+            usart2_write_byte(typed);
+        }
     }
 }
