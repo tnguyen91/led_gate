@@ -963,3 +963,66 @@ Debug build (-O0). I worked out the predictions before running the tests.
 - Add `millis`, which prints the milliseconds since reset.
 - Receive by interrupt into a ring buffer, so bytes aren't lost while the loop is busy.
 - Capture the frames with the logic analyzer and PulseView's UART decoder.
+
+## 2026-11-06: The millis command
+
+### Setup
+
+- `millis` prints the milliseconds since SysTick started, in decimal. The count was already there: since 2026-10-25 the SysTick handler has added 1 to `elapsed_ms` every millisecond, and `millis()` returns it. Its only caller, `delay_ms`, went with the blink loop in the echo step, so the linker had been dropping `millis()` (`--gc-sections`). This command calls it again.
+- No `printf`. A test program with nothing but one `printf` came to 7,640 bytes of code and pulled in `malloc` (GCC 13.2.1, newlib-nano, -O2). The whole shell, `millis` included, builds to 2,704 bytes of flash with GCC 14.2 and this project's Debug flags.
+- The digits come out last first. `value % 10u` is the lowest digit, and `value /= 10u` drops it. So `usart2_write_decimal` writes the `\0` into the last byte of `text` and fills the digits in backward from there. `usart2_write_string` then sends from the first digit and stops at the `\0`.
+- The loop is a do-while, so its body runs once before the first test, and 0 prints `0`. A plain `while` would skip the body for 0 and send no digits at all.
+- A digit d becomes its character as `'0' + d`, since `'0'` to `'9'` are the bytes 48 to 57, in order. The `(char)` cast marks putting the 32-bit result into a 1-byte `char` as intended.
+- `text` is 11 bytes. An n-bit unsigned type holds 0 to 2^n - 1, so the largest `uint32_t` is 2^32 - 1 = 4,294,967,295: 10 digits, plus the `\0`. It's also the last count before `elapsed_ms` wraps to 0.
+- `text` is a local, so each call gets its own, in its stack frame, only while the call runs. A `static` buffer would sit in `.bss`, shared by every call, so an interrupt that printed a number partway through could overwrite main's digits.
+
+```c
+#define UINT32_TEXT_SIZE 11u /* "4294967295" + null terminator */
+```
+
+```c
+static void usart2_write_decimal(uint32_t value)
+{
+    char text[UINT32_TEXT_SIZE];
+    uint32_t first_digit = UINT32_TEXT_SIZE - 1u;
+
+    text[first_digit] = '\0';
+    do {
+        first_digit--;
+        text[first_digit] = (char)('0' + (value % 10u));
+        value /= 10u;
+    } while (value != 0u);
+
+    usart2_write_string(&text[first_digit]);
+}
+```
+
+In `run_command`, a new branch:
+
+```c
+    else if (strcmp(line, "millis") == 0) {
+        usart2_write_decimal(millis());
+        usart2_write_string(" ms\r\n");
+    }
+```
+
+Debug build (-O0). I worked out the prediction before running the test.
+
+### Results
+
+| Check | Predicted | Result |
+| --- | --- | --- |
+| `millis`, then `millis` again about 10 s later, timed with a phone stopwatch started at the first Enter | The gap between the readings matches the stopwatch within about 300 ms. My timing sets that margin: the clock's 0.1% is only about 10 ms over 10 s | `65488 ms`, then `75814 ms`: a gap of 10,326 ms. The stopwatch read 10.34 s at the second Enter, 14 ms more |
+
+- The board counted 14 ms less than the stopwatch, about 0.14%. In the first 2026-11-02 capture the HSI ran about 0.1% slow, which would account for about 10 ms. But my Enter presses and stopwatch taps can be that far apart too, so this test can't separate the two. It shows that `millis` counts real milliseconds; the logic analyzer is still the way to measure the clock itself.
+- The rest of the run: `help` printed `Commands: led, help, millis`.
+
+### Mistakes and confusions
+
+1. **Thinking the `\0` gets sent.** I said `usart2_write_decimal(1050)` sends `1050\0`, with the `\0` marking the end. It sends 4 bytes. `usart2_write_string` tests `*str != '\0'` before its body, and only the body sends, so the loop stops at the `\0` without sending it: for `"ok"`, the test runs 3 times and the body twice. Lines end on the `\r\n` the code sends.
+2. **Sizing `text` by bits.** I didn't know where 4,294,967,295 came from. Then, for a `uint16_t`, I said `text` would need 17 bytes, counting its 16 bits as 16 digits, plus the `\0`. It holds decimal digits, one byte each, and the largest `uint16_t`, 65,535, has 5, so it needs 6 bytes. 17 would be right for printing in binary.
+
+### Next steps: UART shell
+
+- Receive by interrupt into a ring buffer, so bytes aren't lost while the loop is busy.
+- Capture the frames with the logic analyzer and PulseView's UART decoder.

@@ -4,7 +4,7 @@ Bare-metal C on an STM32 Nucleo-F411RE board. No HAL and no generated setup code
 
 This is a learning record, not a finished project. [LOG.md](LOG.md) records each step: what I predicted, what happened, and the mistakes I made.
 
-Current work: a UART command shell on USART2, built from the registers up. It already takes commands typed in a PC terminal: `led` toggles LD2, and `help` lists the commands.
+Current work: a UART command shell on USART2, built from the registers up. It already takes commands typed in a PC terminal: `led` toggles LD2, `help` lists the commands, and `millis` prints the milliseconds since startup.
 
 ## Demo
 
@@ -44,13 +44,14 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | USART2 at 115200 baud, 8N1 | Done: BRR 0x8B (139 cycles per bit, 0.08% slow) and CR1 0x200C; "Hello from USART2" reached the PC's terminal through the ST-LINK; with the terminal set to 9600, it arrived as garbage |
 | Echo | Done: typed bytes come back. A byte typed while the debugger had the CPU halted came back after Continue |
 | Line buffer, `led`, and `help` | Done: `led` toggles LD2 and reports its new state, and `help` lists the commands. A line holds 31 letters plus its `\0`, and extra letters are dropped (see LOG) |
-| UART command shell | In progress: `millis` next, then receiving by interrupt into a ring buffer |
+| `millis` | Done: prints the milliseconds since startup in decimal, without `printf`. Two readings 10.34 s apart by a phone stopwatch differed by 10,326 ms (see LOG) |
+| UART command shell | In progress: the polled version works; receiving by interrupt into a ring buffer is next |
 
 ## Build and run
 
 Open the folder in VS Code with the STM32CubeIDE for Visual Studio Code extension. Start the "STM32Cube: Launch ST-Link GDB Server" debug configuration: it builds, flashes the board, and stops at `main`.
 
-Open the ST-LINK's virtual COM port in a serial terminal at 115200 baud, 8 data bits, no parity, 1 stop bit. On WSL, with the board attached, the port is /dev/ttyACM0: screen /dev/ttyACM0 115200 (Ctrl-A, then K, closes it). On Windows, PuTTY on the board's COM port works too.
+Open the ST-LINK's virtual COM port in a serial terminal at 115200 baud, 8 data bits, no parity, 1 stop bit. On WSL, with the board attached, the port is `/dev/ttyACM0`: `screen /dev/ttyACM0 115200` (Ctrl-A, then K, closes it). On Windows, PuTTY on the board's COM port works too.
 
 Press Continue. The terminal shows "Hello from USART2" and a `>` prompt. Type `help` and press Enter to list the commands.
 
