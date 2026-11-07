@@ -53,6 +53,7 @@
 
 #define LINE_BUFFER_SIZE 32u
 #define ASCII_DEL 127u
+#define UINT32_TEXT_SIZE 11u /* "4294967295" + null terminator */
 static volatile uint32_t elapsed_ms;
 
 void SysTick_Handler(void)
@@ -60,8 +61,8 @@ void SysTick_Handler(void)
     elapsed_ms++;
 }
 
-uint32_t millis(void) 
-{ 
+uint32_t millis(void)
+{
     return elapsed_ms;
 }
 
@@ -106,6 +107,21 @@ static void usart2_write_string(const char *str)
     }
 }
 
+static void usart2_write_decimal(uint32_t value)
+{
+    char text[UINT32_TEXT_SIZE];
+    uint32_t first_digit = UINT32_TEXT_SIZE - 1u;
+
+    text[first_digit] = '\0';
+    do {
+        first_digit--;
+        text[first_digit] = (char)('0' + (value % 10u));
+        value /= 10u;
+    } while (value != 0u);
+
+    usart2_write_string(&text[first_digit]);
+}
+
 static char usart2_read_byte(void)
 {
     while ((USART2_SR & USART2_SR_RXNE) == 0u) {
@@ -124,8 +140,12 @@ static void run_command(const char *line)
             usart2_write_string("LD2 OFF\r\n");
         }
     }
+    else if (strcmp(line, "millis") == 0) {
+        usart2_write_decimal(millis());
+        usart2_write_string(" ms\r\n");
+    }
     else if (strcmp(line, "help") == 0) {
-        usart2_write_string("Commands: led, help\r\n");
+        usart2_write_string("Commands: led, help, millis\r\n");
     }
     else if (line[0] != '\0') {
         usart2_write_string("Unknown command: ");
