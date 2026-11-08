@@ -45,7 +45,8 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | Echo | Done: typed bytes come back. A byte typed while the debugger had the CPU halted came back after Continue |
 | Line buffer, `led`, and `help` | Done: `led` toggles LD2 and reports its new state, and `help` lists the commands. A line holds 31 letters plus its `\0`, and extra letters are dropped (see LOG) |
 | `millis` | Done: prints the milliseconds since startup in decimal, without `printf`. Two readings 10.34 s apart by a phone stopwatch differed by 10,326 ms (see LOG) |
-| UART command shell | In progress: the polled version works; receiving by interrupt into a ring buffer is next |
+| Overrun on the polled shell | Done: with two commands sent in one write, only the first letter of the second reached the shell. Its other 4 bytes arrived while the 33-byte `help` reply went out and were lost (see LOG) |
+| UART command shell | In progress: the polled version works but loses bytes that arrive while it replies; receiving by interrupt into a ring buffer is next |
 
 ## Build and run
 

@@ -1026,3 +1026,37 @@ Debug build (-O0). I worked out the prediction before running the test.
 
 - Receive by interrupt into a ring buffer, so bytes aren't lost while the loop is busy.
 - Capture the frames with the logic analyzer and PulseView's UART decoder.
+
+## 2026-11-07: Bytes lost while the shell replies
+
+### Setup
+
+- The shell reads DR only in `usart2_read_byte`. While it sends a reply, it sits in `usart2_write_byte`'s TXE wait, and nothing reads DR. USART2's receiver doesn't wait for the CPU: it keeps taking bytes off PA3, one every 86.8 µs at 115,200 baud (10 bits per byte). But DR holds only one received byte.
+- So what matters is how many bytes finish arriving while the loop is away. One byte waits in DR, as `a` did in the echo step's pause test. A second one finishes while the first is still unread, and that's an overrun. RM0383, USART_SR bit 3 (ORE): "When this bit is set, the RDR register content is not lost but the shift register is overwritten." The shift register is where the receiver collects a byte's bits as they come in. It has no address, so the code can't read it. RDR holds the finished byte, and a read of DR returns it.
+- Typing can't make bytes arrive back to back, so a second WSL terminal sends two commands in one write while `screen` stays open in the first: `printf 'help\rhelp\r' > /dev/ttyACM0`. printf turns `\r` into the byte Enter sends. The board's replies still show up in `screen`, since it's the program reading the port.
+- The reply to the first `help` is 33 bytes: `"\r\n"`, then `"Commands: led, help, millis\r\n"`, then `"> "`. That's 2,864.4 µs on the wire. The second `help` and its `\r` take 434 µs, so all 5 of its bytes finish arriving while the loop is still sending.
+- No code changes: this is the shell from 2026-11-06, as it was.
+
+Debug build (-O0). I worked out the predictions before running the test.
+
+### Results
+
+| Check | Predicted | Result |
+| --- | --- | --- |
+| Which bytes of the second `help` reach the shell | Only `h`. `e`, `l`, `p`, and `\r` each finish while `h` is still unread in DR, so they're lost | Only `h`: `screen` showed `> h` and waited |
+| The last byte, `\r`, left in the shift register | It never moves into RDR, even after the loop reads `h` | It never did: nothing ran until I pressed Enter |
+| Then Enter | `Unknown command: h` | `Unknown command: h`, then a new prompt |
+
+- `h` landed in DR and waited there with RXNE set until the reply was out. Then the loop read it, stored it in `line` like any typed letter, and echoed it. The other 4 bytes each finished while `h` was unread, so none of them got into RDR; in the shift register, each new one wrote over the one before. The loop never saw them, so to the shell it looked as if I had typed `h`. At Enter, `line` was `h`, which matches no command.
+- `\r` was the last byte in, with nothing after it to write over it. If the hardware had moved it into RDR once `h` was read, the shell would have run `h` without my Enter. It didn't: a byte that arrives during an overrun is lost even when nothing comes after it.
+- `screen` didn't show the banner or the first prompt, because the board sent them before I opened it. No banner came after the printf, so the printf didn't restart the board.
+
+### Mistakes and confusions
+
+1. **Arriving and being read.** I said none of the second command's bytes would arrive while the loop was busy sending, because it wasn't reading. Arriving is the receiver's job, and it never waits for the CPU. Only reading waits for the loop. The echo step's pause test had already shown this: `a` arrived while the CPU was halted and waited in DR.
+2. **The lost bytes and the `\0`.** I said the lost bytes would be overwritten by the null terminator. The `\0` is in `line`, in RAM, and only the loop writes it, when it reads `\r`. The lost bytes never reached the loop: they were lost inside USART2, in the shift register.
+
+### Next steps: UART shell
+
+- Receive by interrupt into a ring buffer, then run this test again: it should lose nothing.
+- Capture the frames with the logic analyzer and PulseView's UART decoder, including this test's bytes on PA3, to see whether the ST-LINK sends them with gaps.
