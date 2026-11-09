@@ -1060,3 +1060,119 @@ Debug build (-O0). I worked out the predictions before running the test.
 
 - Receive by interrupt into a ring buffer, then run this test again: it should lose nothing.
 - Capture the frames with the logic analyzer and PulseView's UART decoder, including this test's bytes on PA3, to see whether the ST-LINK sends them with gaps.
+
+## 2026-11-09: Receiving by interrupt into a ring buffer
+
+### Setup
+
+- In the polled shell, nothing read DR while the loop sent a reply, so a second command sent right behind the first was lost (2026-11-07). Now USART2's interrupt reads DR. When a byte's last bit is in, RXNE goes up and the hardware calls `USART2_IRQHandler`, even in the middle of `usart2_write_byte`'s TXE wait.
+- The interrupt needs two switches. RXNEIE (USART2_CR1 bit 5) lets USART2 raise its request, and bit 6 of the NVIC's ISER1 lets the request through to the CPU. USART2's interrupt is number 38 in ST's header, and ISER1 covers interrupts 32 to 63. SysTick needed only TICKINT, because it's part of the core and has no ISER bit. Defining `USART2_IRQHandler` replaced the startup file's weak alias at vector entry 54 (16 + 38), as `SysTick_Handler` did at entry 15.
+- ISER1 takes a plain `=`. PM0214 marks the ISER bits rs (read/set), and writing 0 to one has no effect, so the zeros don't turn off any other interrupt.
+- The handler has one byte-time, 86.8 µs, to read DR before the next byte finishes and overruns. That's 1,389 cycles at 16 MHz. In a GCC 14.2 build with this project's Debug flags, its usual path is 44 instructions.
+- The handler puts each byte in a ring buffer, and main takes it out. The ring is a 64-slot array with two indices. `rx_head` is the next slot the handler fills, and `rx_tail` is the next slot main reads. Each wraps from 63 to 0 with `& RX_RING_MASK`, which works because 64 is a power of 2. The ring is empty when the two are equal, and full when the slot after `rx_head` is `rx_tail`. So one slot always stays empty and 63 bytes fit. If all 64 could fill, `rx_head` would land on `rx_tail`, and a full ring would look empty.
+- Each index has one writer, like `elapsed_ms`. Only the handler writes `rx_head`, and only main writes `rx_tail`. A count shared by both sides would need a lock. Main's `count--` is a load, a subtract and a store, and a handler that ran between the load and the store would have its update overwritten. With one writer, the other side only reads, in one 32-bit load. Everything shared is `volatile`, so main's wait loop reads `rx_head` again on every pass.
+- Before it returns, the handler has to clear whatever raised its request, or the NVIC runs it again at once and main never gets the CPU back. A read of SR followed by a read of DR clears both RXNE and ORE. RM0383's section on overruns (19.3.3) adds that ORE can be set while RXNE is 0. So the handler reads DR when either flag is set, and stores the byte only when RXNE was set.
+- When the ring is full, the handler drops the new byte and counts it, the same choice USART2 makes on an overrun. Overwriting the oldest byte instead would mean the handler moving `rx_tail`, which would then have two writers. `rx_overrun_count` counts the times the handler finds ORE set.
+- The handler only moves the byte. Echoing, running commands and printing stay in main.
+- `usart2_read_byte` keeps its name, so main's loop doesn't change. It now waits on the ring instead of on RXNE.
+- I also reordered the `help` reply to `Commands: led, millis, help`. It's the same 29 bytes, so the timing from 2026-11-07 still holds.
+
+In the USART2 block, two new bits.
+
+```c
+#define USART2_SR_ORE        (1u << 3)
+```
+
+```c
+#define USART2_CR1_RXNEIE    (1u << 5)
+```
+
+After `UINT32_TEXT_SIZE`, the NVIC lines and the ring's size.
+
+```c
+#define NVIC_ISER1           (*(volatile uint32_t *)0xE000E104u)
+#define NVIC_ISER1_USART2    (1u << (38u - 32u)) /* IRQ 38, ISER1 holds IRQs 32 to 63 */
+
+#define RX_RING_SIZE         64u /* a power of 2, so an index wraps with a mask */
+#define RX_RING_MASK         (RX_RING_SIZE - 1u)
+```
+
+The end of `usart2_init`.
+
+```c
+    USART2_BRR = USART2_CYCLES_PER_BIT;
+    USART2_CR1 = USART2_CR1_RE | USART2_CR1_TE | USART2_CR1_UE | USART2_CR1_RXNEIE;
+
+    NVIC_ISER1 = NVIC_ISER1_USART2;
+}
+```
+
+The ring, the handler, and the new `usart2_read_byte`, in place of the old one.
+
+```c
+static volatile char rx_ring[RX_RING_SIZE];
+static volatile uint32_t rx_head; // written only by handler
+static volatile uint32_t rx_tail; // written only by main
+static volatile uint32_t rx_dropped_count;
+static volatile uint32_t rx_overrun_count;
+
+void USART2_IRQHandler(void)
+{
+    uint32_t status = USART2_SR;
+    if ((status & (USART2_SR_RXNE | USART2_SR_ORE)) == 0u) {
+        return; // ignore the interrupt if neither RXNE nor ORE is set
+    }
+
+    char received = (char)USART2_DR; // after the SR read, this clears ORE as well as RXNE
+
+    if ((status & USART2_SR_ORE) != 0u) {
+        rx_overrun_count++;
+    }
+    if ((status & USART2_SR_RXNE) == 0u) {
+        return; // ORE alone, so DR holds a byte this handler already took
+    }
+
+    uint32_t next_head = (rx_head + 1u) & RX_RING_MASK;
+    if (next_head == rx_tail) {
+        rx_dropped_count++;
+        return;
+    }
+    rx_ring[rx_head] = received;
+    rx_head = next_head;
+}
+
+static char usart2_read_byte(void)
+{
+    while (rx_head == rx_tail) {
+    }
+
+    char received = rx_ring[rx_tail];
+    rx_tail = (rx_tail + 1u) & RX_RING_MASK;
+    return received;
+}
+```
+
+Debug build (-O0). I worked out the predictions before running the tests.
+
+### Results
+
+| Check | Predicted | Result |
+| --- | --- | --- |
+| The same printf as 2026-11-07, `printf 'help\rhelp\r' > /dev/ttyACM0`, from a fresh `screen` | Both commands run | Both ran. `screen` showed `help`, the list, `> help`, the list again, and a new prompt |
+| `rx_dropped_count` and `rx_overrun_count` in the Watch panel afterward | 0 and 0 | 0 and 0 |
+| `help` and `led` typed by hand | They work as before | They did, and `led` printed `LD2 ON` |
+| The pause test again. With the CPU halted in the debugger, I typed `abc`, then pressed Continue | `screen` shows `> a`. Dropped stays 0, and the overrun count reads 2, for `b` and `c` | `> a`, dropped 0, overrun 1 |
+
+- During the first reply, the handler took each byte of the second `help` out of DR as it arrived and put it in the ring. Main read them once the reply was out, so the shell ran `help` twice. At most 5 bytes could wait in the ring, well under 63, so nothing was dropped. The overrun count of 0 shows the handler read DR within one byte-time every time.
+- In the pause test the handler couldn't run while the CPU was halted, so `a` waited in DR, and `b` and `c` overran. On Continue the handler ran once, with RXNE and ORE both set. It stored `a` and counted one overrun.
+- `screen` showed the banner only in runs where I had pressed reset with it open, since the board sends the banner only at startup.
+
+### Mistakes and confusions
+
+1. **The overrun count.** I predicted 2, one each for `b` and `c`. It read 1. ORE is one flag, not a counter. `b` set it, and when `c` overran, it was already set. The handler ran once, found ORE once, and counted once. RM0383's note on overruns says ORE means "at least 1 data has been lost", so the flag can't say how many.
+2. **The ring and overruns.** I said the ring's size was why nothing would overrun. The ring only prevents drops, which happen when it's full. An overrun happens inside USART2, when a byte finishes while DR is still unread. What prevents it is the handler reading DR within one byte-time.
+
+### Next steps: UART shell
+
+- Capture the frames with the logic analyzer and PulseView's UART decoder, including the printf's bytes on PA3, to see whether the ST-LINK sends them with gaps.
+- Then the README, with the captures.

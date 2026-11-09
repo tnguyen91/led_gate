@@ -4,7 +4,7 @@ Bare-metal C on an STM32 Nucleo-F411RE board. No HAL and no generated setup code
 
 This is a learning record, not a finished project. [LOG.md](LOG.md) records each step: what I predicted, what happened, and the mistakes I made.
 
-Current work: a UART command shell on USART2, built from the registers up. It already takes commands typed in a PC terminal: `led` toggles LD2, `help` lists the commands, and `millis` prints the milliseconds since startup.
+Current work is a UART command shell on USART2, built from the registers up. It takes commands typed in a PC terminal. `led` toggles LD2, `help` lists the commands, and `millis` prints the milliseconds since startup. An interrupt handler moves each received byte into a ring buffer, so commands sent back to back aren't lost while the shell replies.
 
 ## Demo
 
@@ -46,7 +46,8 @@ https://github.com/user-attachments/assets/637563ab-eb27-46e3-a006-d548f7ea5eea
 | Line buffer, `led`, and `help` | Done: `led` toggles LD2 and reports its new state, and `help` lists the commands. A line holds 31 letters plus its `\0`, and extra letters are dropped (see LOG) |
 | `millis` | Done: prints the milliseconds since startup in decimal, without `printf`. Two readings 10.34 s apart by a phone stopwatch differed by 10,326 ms (see LOG) |
 | Overrun on the polled shell | Done: with two commands sent in one write, only the first letter of the second reached the shell. Its other 4 bytes arrived while the 33-byte `help` reply went out and were lost (see LOG) |
-| UART command shell | In progress: the polled version works but loses bytes that arrive while it replies; receiving by interrupt into a ring buffer is next |
+| Receive by interrupt into a ring buffer | Done. The same two-command write ran both commands, and the drop and overrun counters read 0. With the CPU halted, typed bytes overran, and the handler counted the overrun on Continue (see LOG) |
+| UART command shell | In progress. It receives by interrupt and loses nothing in the overrun test. Logic analyzer captures of its frames are next |
 
 ## Build and run
 
@@ -60,6 +61,6 @@ Press Continue. The terminal shows "Hello from USART2" and a `>` prompt. Type `h
 
 - RM0383: STM32F411xC/E reference manual (registers and memory map)
 - UM1724: STM32 Nucleo-64 boards user manual (board wiring)
-- PM0214: STM32 Cortex-M4 programming manual (SysTick, exceptions, and the vector table)
+- PM0214: STM32 Cortex-M4 programming manual (SysTick, the NVIC, exceptions, and the vector table)
 
 All three are free PDFs from st.com.
