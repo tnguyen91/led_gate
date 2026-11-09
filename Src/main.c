@@ -30,11 +30,13 @@
 #define USART2_SR            (*(volatile uint32_t *)0x40004400u)
 #define USART2_SR_TXE        (1u << 7)
 #define USART2_SR_RXNE       (1u << 5)
+#define USART2_SR_ORE        (1u << 3)
 #define USART2_DR            (*(volatile uint32_t *)0x40004404u)
 #define USART2_BRR           (*(volatile uint32_t *)0x40004408u)
 #define USART2_CR1           (*(volatile uint32_t *)0x4000440Cu)
 #define USART2_CR1_RE        (1u << 2)
 #define USART2_CR1_TE        (1u << 3)
+#define USART2_CR1_RXNEIE    (1u << 5)
 #define USART2_CR1_UE        (1u << 13)
 
 #define STK_CTRL             (*(volatile uint32_t *)0xE000E010u)
@@ -54,6 +56,13 @@
 #define LINE_BUFFER_SIZE 32u
 #define ASCII_DEL 127u
 #define UINT32_TEXT_SIZE 11u /* "4294967295" + null terminator */
+
+#define NVIC_ISER1           (*(volatile uint32_t *)0xE000E104u)
+#define NVIC_ISER1_USART2    (1u << (38u - 32u)) /* IRQ 38, ISER1 holds IRQs 32 to 63 */
+
+#define RX_RING_SIZE         64u /* a power of 2, so an index wraps with a mask */
+#define RX_RING_MASK         (RX_RING_SIZE - 1u)
+
 static volatile uint32_t elapsed_ms;
 
 void SysTick_Handler(void)
@@ -89,7 +98,9 @@ static void usart2_init(void)
                 | ((GPIO_MODE_ALTERNATE << GPIOA_MODER3_POS) & GPIOA_MODER3_MASK);
 
     USART2_BRR = USART2_CYCLES_PER_BIT;
-    USART2_CR1 = USART2_CR1_RE | USART2_CR1_TE | USART2_CR1_UE;
+    USART2_CR1 = USART2_CR1_RE | USART2_CR1_TE | USART2_CR1_UE | USART2_CR1_RXNEIE;
+
+    NVIC_ISER1 = NVIC_ISER1_USART2;
 }
 
 static void usart2_write_byte(char byte)
@@ -122,11 +133,45 @@ static void usart2_write_decimal(uint32_t value)
     usart2_write_string(&text[first_digit]);
 }
 
+static volatile char rx_ring[RX_RING_SIZE];
+static volatile uint32_t rx_head; // written only by handler
+static volatile uint32_t rx_tail; // written only by main
+static volatile uint32_t rx_dropped_count;
+static volatile uint32_t rx_overrun_count;
+
+void USART2_IRQHandler(void)
+{
+    uint32_t status = USART2_SR;
+    if ((status & (USART2_SR_RXNE | USART2_SR_ORE)) == 0u) {
+        return; // ignore the interrupt if neither RXNE nor ORE is set
+    }
+
+    char received = (char)USART2_DR; // after the SR read, this clears ORE as well as RXNE
+
+    if ((status & USART2_SR_ORE) != 0u) {
+        rx_overrun_count++;
+    }
+    if ((status & USART2_SR_RXNE) == 0u) {
+        return; // ORE alone, so DR holds a byte this handler already took
+    }
+
+    uint32_t next_head = (rx_head + 1u) & RX_RING_MASK;
+    if (next_head == rx_tail) {
+        rx_dropped_count++;
+        return;
+    }
+    rx_ring[rx_head] = received;
+    rx_head = next_head;
+}
+
 static char usart2_read_byte(void)
 {
-    while ((USART2_SR & USART2_SR_RXNE) == 0u) {
+    while (rx_head == rx_tail) {
     }
-    return (char)USART2_DR;
+
+    char received = rx_ring[rx_tail];
+    rx_tail = (rx_tail + 1u) & RX_RING_MASK;
+    return received;
 }
 
 static void run_command(const char *line)
@@ -145,7 +190,7 @@ static void run_command(const char *line)
         usart2_write_string(" ms\r\n");
     }
     else if (strcmp(line, "help") == 0) {
-        usart2_write_string("Commands: led, help, millis\r\n");
+        usart2_write_string("Commands: led, millis, help\r\n");
     }
     else if (line[0] != '\0') {
         usart2_write_string("Unknown command: ");
