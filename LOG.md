@@ -1176,3 +1176,74 @@ Debug build (-O0). I worked out the predictions before running the tests.
 
 - Capture the frames with the logic analyzer and PulseView's UART decoder, including the printf's bytes on PA3, to see whether the ST-LINK sends them with gaps.
 - Then the README, with the captures.
+
+## 2026-11-10: Capturing the shell's frames
+
+### Setup
+
+- The logic analyzer from 2026-11-02, now on USART2's two wires, with PulseView's UART decoder at 115200 baud, 8 data bits, no parity, 1 stop bit.
+- I first put the two signal wires on CN10 pins 35 and 37, which UM1724's Table 29 names PA2 and PA3. Both read flat high while the shell was printing in the terminal (see Mistakes).
+- The signals were on CN3, the 2-pin header on the ST-LINK part of the board. The channel on CN3's RX pin showed the banner after a reset, so the ST-LINK's RX is the board's TX (PA2). The other pin is PA3, which carries what the PC sends.
+- Wiring as used: D1 on PA2 (TX), D0 on PA3 (RX), and the analyzer's ground on CN5's GND socket. Both USB cables in and the ground on before the signal wires.
+- A frame is 10 bit times: a start bit (low), 8 data bits with the least significant first, and a stop bit (high). BRR is 139, so one bit time is 139 / 16 MHz = 8.6875 µs.
+
+### Reading a frame by hand
+
+Capture: 1 MHz, 5 M samples, reset pressed during the capture. Before adding the decoder, I read the banner's first frame off the trace with the cursors.
+
+| Stretch | Width | Bit times | Bits |
+| --- | --- | --- | --- |
+| Low | 35 µs | 4 | The start bit, then 0, 0, 0 |
+| High | 8 µs | 1 | 1 |
+| Low | 18 µs | 2 | 0, 0 |
+| High | 8 µs | 1 | 1 |
+| Low | 9 µs | 1 | 0 |
+| High | 9 µs | 1 | The stop bit |
+
+The data bits in the order sent are 0001 0010. The least significant bit goes first, so flipped they read 0100 1000, which is 0x48, `H`: the first letter of "Hello from USART2". The whole frame measured 87 µs.
+
+### The banner, decoded
+
+Prediction: 21 frames on TX. `"Hello from USART2\r\n"` sends 19 (its `\0` is stored but never sent), and `"> "` sends 2. Nothing on RX.
+
+Result: 21 frames, reading `Hello from USART2`, `[0D]`, `[0A]`, `>`, and a space. RX stayed flat.
+
+![The banner decoded by PulseView's UART decoder](captures/banner_decoded.png)
+
+### Two commands in one write
+
+Capture: 4 MHz, 20 M samples, with `printf 'help\rhelp\r' > /dev/ttyACM0` sent from a second terminal during the capture. This is the write that lost the second command on the polled shell (2026-11-07).
+
+Predictions:
+
+- RX shows 10 frames, back to back.
+- TX shows 74: for each command, 4 echoed letters and then the 33-byte reply.
+- The second `help\r` arrives while TX is still sending the first reply.
+
+Result: all three held. The second command's 5 bytes arrive on RX under the `Comm` of the first reply. The handler stores them in the ring, and the shell echoes and runs them right after the first `> `.
+
+![Both wires during the two-command write](captures/two_commands.png)
+
+### Timing
+
+| Measurement | Span | Reading |
+| --- | --- | --- |
+| RX, from the first falling edge to the start of the last `[0D]` | 9 frames, 90 bits | 780.0 µs |
+| TX, from the start of the first `C` to the start of the second `C` | 37 frames, 370 bits | 3,217.5 µs |
+
+- **RX.** Back to back at exactly 115200 baud would be 781.25 µs. So the ST-LINK sends the printf's bytes with no gaps, which the 2026-11-07 arithmetic had assumed.
+- **TX.** Each reading is good to about 0.25 µs, one sample at each end. At exactly 115200 baud the span would be 3,211.8 µs. At BRR's 8.6875 µs it would be 3,214.4 µs. The reading is 3,217.5 µs.
+  - 3,214.4 - 3,211.8 = 2.6 µs comes from BRR's rounding. It would be there with a perfect clock.
+  - 3,217.5 - 3,214.4 = 3.1 µs is what's left, the internal oscillator (HSI) running slow: 3.1 / 3,214.4 = 0.096%.
+- On 2026-11-02, LD2's high time put the HSI about 0.095% slow. Two different measurements of the same clock agree.
+- One bit could not show this. At 4 MHz the samples are 0.25 µs apart, about 3% of a bit. Over 370 bits the same 0.25 µs is about 0.008%.
+
+![The TX span, 370 bits](captures/tx_span_370_bits.png)
+
+![The RX span, 9 frames](captures/rx_span_9_frames.png)
+
+The PulseView sessions are in `captures/banner.sr` and `captures/two_commands.sr`.
+
+### Mistakes and confusions
+
+1. **CN10 pins 35 and 37.** Table 29 lists them as PA2 and PA3, but on my board both read flat high during traffic. To rule out my wiring, I put the same channel on CN10 pin 9 (GND), which read low, and on pin 11 (PA5), which followed LD2 as `led` toggled it. So the channel and my pin counting were fine, and the two pins carry no signal. The likely cause is that they sit behind solder bridges SB62 and SB63, which are open by default, like the D0 and D1 sockets. I haven't checked that in the schematic. CN3 worked without soldering.
