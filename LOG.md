@@ -1245,3 +1245,132 @@ The PulseView sessions are in `captures/banner.sr` and `captures/two_commands.sr
 ### Mistakes and confusions
 
 1. **CN10 pins 35 and 37.** Table 29 lists them as PA2 and PA3, but on my board both read flat high during traffic. To rule out my wiring, I put the same channel on CN10 pin 9 (GND), which read low, and on pin 11 (PA5), which followed LD2 as `led` toggled it. So the channel and my pin counting were fine, and the two pins carry no signal. The likely cause is that they sit behind solder bridges SB62 and SB63, which are open by default, like the D0 and D1 sockets. I haven't checked that in the schematic. CN3 worked without soldering.
+
+## 2026-11-10: Wiring a CAP1188 and checking the I2C bus
+
+### Setup
+
+- Phase 2 starts with I2C: reading the three ID registers of a CAP1188 touch sensor (Adafruit's breakout) over I2C1, with a capture of the transfer. This entry is the wiring, and a check of the bus before any I2C code.
+- I2C has two wires, SDA for data and SCL for the clock. A device only ever pulls a line low or lets go of it (open-drain), and a pull-up resistor brings the line high when nobody pulls. Adafruit's schematic shows a 10 kΩ pull-up on each line (R9 and R10), to the breakout's own regulated supply.
+- Wiring, with the USB cable unplugged:
+
+| Breakout | Board |
+| --- | --- |
+| VIN | CN6, +3V3. Not +5V, and not the board's VIN, which is an input for an external 7 to 12 V supply |
+| GND | CN6, GND |
+| SDA | CN5, D14 (PB9, I2C1_SDA) |
+| SCK | CN5, D15 (PB8, I2C1_SCL). Adafruit labels SCL as SCK |
+
+- The other breakout pins stay unconnected. A 150 kΩ resistor on AD sets the address to 0x29, and a 10 kΩ holds RST low, since the CAP1188's reset is active high.
+- UM1724 lists no solder bridge between PB8 and PB9 and either D14 and D15 or CN10 pins 3 and 5. SB46 and SB52 only route the two pins to A4 and A5, and they're off by default, so A4 and A5 aren't I2C1 on this board.
+- The analyzer: D0 on CN10 pin 3 (PB8, SCL), D1 on CN10 pin 5 (PB9, SDA), and its ground on CN10 pin 9.
+
+### Idle lines
+
+Capture: 1 MHz, 5 M samples, with everything wired and powered and the shell running. The shell doesn't touch PB8 or PB9.
+
+- **VIN connected.** Prediction: both lines high, since nothing pulls them and the pull-ups hold them up. Result: both flat high.
+- **VIN pulled off the breakout.** Prediction: both lines low, since the pull-ups would have no supply. Result: both still flat high (see Mistakes).
+
+### Pulling each line low from the board
+
+To put a level I control on each line, I made PB8 and PB9 open-drain outputs and added two commands, `scl` and `sda`, which toggle each pin's ODR bit. GPIOB_OTYPER sets each pin's output type: 0 is push-pull, the reset value, and 1 is open-drain.
+
+| | PA5, LD2 | PB8 and PB9 |
+| --- | --- | --- |
+| OTYPER | 0, push-pull | 1, open-drain |
+| ODR bit at 1 | The pin drives high | The pin lets go, and the pull-up brings the line high |
+| ODR bit at 0 | The pin drives low | The pin pulls the line low |
+
+ODR goes to 1 before MODER switches the pins to output, so neither line dips low at startup.
+
+In the RCC block, GPIOB's clock bit.
+
+```c
+#define RCC_AHB1ENR_GPIOBEN  (1u << 1)
+```
+
+After the GPIOA block, GPIOB's three registers.
+
+```c
+#define GPIOB_MODER          (*(volatile uint32_t *)0x40020400u)
+#define GPIOB_MODER8_POS     16u
+#define GPIOB_MODER8_MASK    (3u << GPIOB_MODER8_POS)
+#define GPIOB_MODER9_POS     18u
+#define GPIOB_MODER9_MASK    (3u << GPIOB_MODER9_POS)
+#define GPIOB_OTYPER         (*(volatile uint32_t *)0x40020404u)
+#define GPIOB_OTYPER_OT8     (1u << 8)
+#define GPIOB_OTYPER_OT9     (1u << 9)
+#define GPIOB_ODR            (*(volatile uint32_t *)0x40020414u)
+#define GPIOB_ODR_ODR8       (1u << 8) /* PB8, D15, SCL */
+#define GPIOB_ODR_ODR9       (1u << 9) /* PB9, D14, SDA */
+```
+
+The setup, called in `main` before `usart2_init()`.
+
+```c
+static void bus_check_init(void)
+{
+    RCC_AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    (void)RCC_AHB1ENR; // same errata wait as GPIOA's
+
+    GPIOB_OTYPER |= GPIOB_OTYPER_OT8 | GPIOB_OTYPER_OT9;
+    GPIOB_ODR |= GPIOB_ODR_ODR8 | GPIOB_ODR_ODR9; // released before output mode, so neither line dips at startup
+
+    GPIOB_MODER = (GPIOB_MODER & ~GPIOB_MODER8_MASK)
+                | ((GPIO_MODE_OUTPUT << GPIOB_MODER8_POS) & GPIOB_MODER8_MASK);
+    GPIOB_MODER = (GPIOB_MODER & ~GPIOB_MODER9_MASK)
+                | ((GPIO_MODE_OUTPUT << GPIOB_MODER9_POS) & GPIOB_MODER9_MASK);
+}
+```
+
+In `run_command`, after `millis`.
+
+```c
+    else if (strcmp(line, "scl") == 0) {
+        GPIOB_ODR ^= GPIOB_ODR_ODR8;
+        if ((GPIOB_ODR & GPIOB_ODR_ODR8) != 0u) {
+            usart2_write_string("SCL released\r\n");
+        }
+        else {
+            usart2_write_string("SCL pulled low\r\n");
+        }
+    }
+    else if (strcmp(line, "sda") == 0) {
+        GPIOB_ODR ^= GPIOB_ODR_ODR9;
+        if ((GPIOB_ODR & GPIOB_ODR_ODR9) != 0u) {
+            usart2_write_string("SDA released\r\n");
+        }
+        else {
+            usart2_write_string("SDA pulled low\r\n");
+        }
+    }
+```
+
+The `help` reply now lists them.
+
+```c
+        usart2_write_string("Commands: led, millis, scl, sda, help\r\n");
+```
+
+Capture: 100 kHz, 2 M samples (20 seconds). During the capture I typed each command twice in screen.
+
+```
+> sda
+SDA pulled low
+> sda
+SDA released
+> scl
+SCL pulled low
+> scl
+SCL released
+> 
+```
+
+Result: D1 went low at the first `sda` and came back high at the second. Then D0 did the same with `scl`. Nothing else moved. Matching the order of the replies to the order of the drops, D1 is on SDA and D0 is on SCL, as wired. Both leads are on the bus lines, the pull-ups work, and the open-drain pins pull each line low and let it go.
+
+![Each line pulled low and released from the board: SDA on D1 first, then SCL on D0](captures/bus_check.png)
+
+### Mistakes and confusions
+
+1. **Pulling VIN didn't bring the lines low.** I predicted both lines would read low with the breakout's VIN wire off, since the pull-ups would lose their supply. Both stayed flat high. An unpowered supply isn't 0 V. With nothing holding it there, it floats, and the lines float with it. This analyzer shows a floating input as high, the same as its unconnected channels. So that test couldn't tell a lead on the line from a loose one. Pulling each line low from the board could.

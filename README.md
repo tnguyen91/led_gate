@@ -29,6 +29,7 @@ The shell's frames, captured with the logic analyzer at 115200 baud, 8N1. The Pu
 
 - NUCLEO-F411RE: STM32F411RE microcontroller (Arm Cortex-M4), with an on-board ST-LINK for flashing and debugging
 - HiLetgo 24 MHz, 8-channel USB logic analyzer, read with sigrok PulseView. For USART2 it connects at CN3, the ST-LINK's TX and RX header; on my board, CN10 pins 35 and 37 carried no signal (see LOG)
+- Adafruit CAP1188 8-key capacitive touch breakout, on I2C1: SCL on PB8 (D15), SDA on PB9 (D14), address 0x29. The analyzer reads the bus at CN10 pins 3 (SCL) and 5 (SDA)
 
 ## Toolchain
 
@@ -64,6 +65,7 @@ The shell's frames, captured with the logic analyzer at 115200 baud, 8N1. The Pu
 | Receive by interrupt into a ring buffer | Done. The same two-command write ran both commands, and the drop and overrun counters read 0. With the CPU halted, typed bytes overran, and the handler counted the overrun on Continue (see LOG) |
 | Capture the shell's frames | Done: the banner's first frame read by hand as 0x48, `H`, then 21 frames decoded. In the two-command write, 10 frames on RX and 74 on TX. 370 bits measured 3,217.5 µs, which splits into the divider's rounding and an oscillator 0.096% slow (see LOG) |
 | UART command shell | Done: `led`, `help`, and `millis`, received by interrupt into a ring buffer, with logic analyzer captures of its frames |
+| Wire the CAP1188 and check the I2C bus | Done: both lines idle high through the breakout's 10 kΩ pull-ups. With PB8 and PB9 as open-drain outputs, `scl` and `sda` pulled each line low and released it, one at a time, on the analyzer (see LOG) |
 
 ## Build and run
 
