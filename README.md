@@ -1,10 +1,10 @@
-# STM32F411 bare-metal learning log
+# Bare-metal UART command shell on STM32F411
 
 Bare-metal C on an STM32 Nucleo-F411RE board. No HAL and no generated setup code: each peripheral is configured by writing its registers directly, with addresses and bit positions taken from ST's manuals.
 
-This is a learning record, not a finished project. [LOG.md](LOG.md) records each step: what I predicted, what happened, and the mistakes I made.
+[LOG.md](LOG.md) is the learning record behind this repo.
 
-Current work is a UART command shell on USART2, built from the registers up. It takes commands typed in a PC terminal. `led` toggles LD2, `help` lists the commands, and `millis` prints the milliseconds since startup. An interrupt handler moves each received byte into a ring buffer, so commands sent back to back aren't lost while the shell replies.
+The project is a UART command shell on USART2, built from the registers up. It takes commands typed in a PC terminal. `led` toggles LD2, `help` lists the commands, and `millis` prints the milliseconds since startup. An interrupt handler moves each received byte into a ring buffer, so commands sent back to back aren't lost while the shell replies.
 
 ![Two commands sent in one write: the second arrives on RX while the first reply goes out on TX](captures/two_commands.png)
 

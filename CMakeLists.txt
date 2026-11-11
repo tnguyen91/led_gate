@@ -13,12 +13,12 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/target.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/gcc-arm-none-eabi.cmake)
 
 # Project definition
-project(led_gate)
+project(stm32f411_bare_metal)
 
 # Enable CMake support for ASM and C/CPP languages
 enable_language(C CXX ASM)
 
-set(PROJECT_NAME led_gate)
+set(PROJECT_NAME stm32f411_bare_metal)
 
 # Create an executable object type
 add_executable(${PROJECT_NAME})

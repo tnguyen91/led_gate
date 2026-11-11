@@ -1,7 +1,5 @@
 # Learning log
 
-Each entry records what I set out to do, what I predicted, what happened, and the mistakes I made.
-
 ## 2026-10-16: Toolchain and const placement
 
 ### Experiment setup
@@ -640,7 +638,7 @@ I read both addresses in the Debug build (-O0): a breakpoint on the `while` line
 
 ### Next steps: memory layout
 
-- Find what takes the 440 bytes below `elapsed_ms` in the build's map file, `build/Debug/led_gate.map`.
+- Find what takes the 440 bytes below `elapsed_ms` in the build's map file, `build/Debug/stm32f411_bare_metal.map`.
 
 ## 2026-11-02: Measuring LD2 with a logic analyzer
 

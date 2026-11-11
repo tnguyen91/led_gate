@@ -1,10 +1,10 @@
 {
-  "name": "led_gate",
+  "name": "stm32f411_bare_metal",
   "configurations": [
     {
       "name": "Debug",
       "type": "Executable",
-      "output_filename": "led_gate",
+      "output_filename": "stm32f411_bare_metal",
       "mcu": "STM32F411RET6",
       "board": "NUCLEO-F411RE",
       "toolchain_type": "GCC",
@@ -98,7 +98,7 @@
           "type": "cpp_linker",
           "flags": [
             "-Tstm32f411xe_flash.ld",
-            "-Wl,-Map=led_gate.map",
+            "-Wl,-Map=stm32f411_bare_metal.map",
             "-u",
             "_printf_float",
             "--specs=nosys.specs",
@@ -117,7 +117,7 @@
     {
       "name": "Release",
       "type": "Executable",
-      "output_filename": "led_gate",
+      "output_filename": "stm32f411_bare_metal",
       "mcu": "STM32F411RET6",
       "board": "NUCLEO-F411RE",
       "toolchain_type": "GCC",
@@ -202,7 +202,7 @@
           "type": "cpp_linker",
           "flags": [
             "-Tstm32f411xe_flash.ld",
-            "-Wl,-Map=led_gate.map",
+            "-Wl,-Map=stm32f411_bare_metal.map",
             "-u",
             "_printf_float",
             "--specs=nosys.specs",
