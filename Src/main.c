@@ -6,6 +6,7 @@
 #define RCC_AHB1ENR_GPIOBEN  (1u << 1)
 #define RCC_APB1ENR          (*(volatile uint32_t *)0x40023840u)
 #define RCC_APB1ENR_USART2EN (1u << 17)
+#define RCC_APB1ENR_I2C1EN   (1u << 21)
 
 #define GPIOA_MODER          (*(volatile uint32_t *)0x40020000u)
 #define GPIOA_MODER5_POS     10u
@@ -29,16 +30,19 @@
 #define GPIO_AF_USART2       7u
 
 #define GPIOB_MODER          (*(volatile uint32_t *)0x40020400u)
-#define GPIOB_MODER8_POS     16u
+#define GPIOB_MODER8_POS     16u /* PB8, D15, SCL */
 #define GPIOB_MODER8_MASK    (3u << GPIOB_MODER8_POS)
-#define GPIOB_MODER9_POS     18u
+#define GPIOB_MODER9_POS     18u /* PB9, D14, SDA */
 #define GPIOB_MODER9_MASK    (3u << GPIOB_MODER9_POS)
 #define GPIOB_OTYPER         (*(volatile uint32_t *)0x40020404u)
 #define GPIOB_OTYPER_OT8     (1u << 8)
 #define GPIOB_OTYPER_OT9     (1u << 9)
-#define GPIOB_ODR            (*(volatile uint32_t *)0x40020414u)
-#define GPIOB_ODR_ODR8       (1u << 8) /* PB8, D15, SCL */
-#define GPIOB_ODR_ODR9       (1u << 9) /* PB9, D14, SDA */
+#define GPIOB_AFRH           (*(volatile uint32_t *)0x40020424u)
+#define GPIOB_AFRH8_POS      0u
+#define GPIOB_AFRH8_MASK     (0xFu << GPIOB_AFRH8_POS)
+#define GPIOB_AFRH9_POS      4u
+#define GPIOB_AFRH9_MASK     (0xFu << GPIOB_AFRH9_POS)
+#define GPIO_AF_I2C1         4u
 
 #define USART2_SR            (*(volatile uint32_t *)0x40004400u)
 #define USART2_SR_TXE        (1u << 7)
@@ -187,18 +191,25 @@ static char usart2_read_byte(void)
     return received;
 }
 
-static void bus_check_init(void)
+static void i2c1_init(void)
 {
+    RCC_APB1ENR |= RCC_APB1ENR_I2C1EN;
+    (void)RCC_APB1ENR; // same errata wait as GPIOA's
     RCC_AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
     (void)RCC_AHB1ENR; // same errata wait as GPIOA's
 
     GPIOB_OTYPER |= GPIOB_OTYPER_OT8 | GPIOB_OTYPER_OT9;
-    GPIOB_ODR |= GPIOB_ODR_ODR8 | GPIOB_ODR_ODR9; // released before output mode, so neither line dips at startup
 
+    GPIOB_AFRH = (GPIOB_AFRH & ~GPIOB_AFRH8_MASK)
+                | ((GPIO_AF_I2C1 << GPIOB_AFRH8_POS) & GPIOB_AFRH8_MASK);
+    GPIOB_AFRH = (GPIOB_AFRH & ~GPIOB_AFRH9_MASK)
+                | ((GPIO_AF_I2C1 << GPIOB_AFRH9_POS) & GPIOB_AFRH9_MASK);
+
+    // MODER last, so each pin switches to I2C1 only after its type and AF are set
     GPIOB_MODER = (GPIOB_MODER & ~GPIOB_MODER8_MASK)
-                | ((GPIO_MODE_OUTPUT << GPIOB_MODER8_POS) & GPIOB_MODER8_MASK);
+                | ((GPIO_MODE_ALTERNATE << GPIOB_MODER8_POS) & GPIOB_MODER8_MASK);
     GPIOB_MODER = (GPIOB_MODER & ~GPIOB_MODER9_MASK)
-                | ((GPIO_MODE_OUTPUT << GPIOB_MODER9_POS) & GPIOB_MODER9_MASK);
+                | ((GPIO_MODE_ALTERNATE << GPIOB_MODER9_POS) & GPIOB_MODER9_MASK);
 }
 
 static void run_command(const char *line)
@@ -216,26 +227,8 @@ static void run_command(const char *line)
         usart2_write_decimal(millis());
         usart2_write_string(" ms\r\n");
     }
-    else if (strcmp(line, "scl") == 0) {
-        GPIOB_ODR ^= GPIOB_ODR_ODR8;
-        if ((GPIOB_ODR & GPIOB_ODR_ODR8) != 0u) {
-            usart2_write_string("SCL released\r\n");
-        }
-        else {
-            usart2_write_string("SCL pulled low\r\n");
-        }
-    }
-    else if (strcmp(line, "sda") == 0) {
-        GPIOB_ODR ^= GPIOB_ODR_ODR9;
-        if ((GPIOB_ODR & GPIOB_ODR_ODR9) != 0u) {
-            usart2_write_string("SDA released\r\n");
-        }
-        else {
-            usart2_write_string("SDA pulled low\r\n");
-        }
-    }
     else if (strcmp(line, "help") == 0) {
-        usart2_write_string("Commands: led, millis, scl, sda, help\r\n");
+        usart2_write_string("Commands: led, millis, help\r\n");
     }
     else if (line[0] != '\0') {
         usart2_write_string("Unknown command: ");
@@ -255,7 +248,7 @@ int main(void)
     GPIOA_MODER = (GPIOA_MODER & ~GPIOA_MODER5_MASK)
                 | ((GPIO_MODE_OUTPUT << GPIOA_MODER5_POS) & GPIOA_MODER5_MASK);
 
-    bus_check_init();
+    i2c1_init();
     usart2_init();
 
     usart2_write_string("Hello from USART2\r\n");
