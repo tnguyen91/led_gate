@@ -1,5 +1,45 @@
 # Learning log
 
+## Contents
+
+**GPIO, the compiler, and the debugger**
+
+- [2026-10-16: Toolchain and const placement](#2026-10-16-toolchain-and-const-placement)
+- [2026-10-16: Which pin drives LD2](#2026-10-16-which-pin-drives-ld2)
+- [2026-10-17: GPIOA clock and PA5 mode](#2026-10-17-gpioa-clock-and-pa5-mode)
+- [2026-10-17: Toggle, delay, and the first blink](#2026-10-17-toggle-delay-and-the-first-blink)
+- [2026-10-18: What -O2 does to the delay loop](#2026-10-18-what--o2-does-to-the-delay-loop)
+- [2026-10-20: Reading GPIOA_MODER back in the debugger](#2026-10-20-reading-gpioa_moder-back-in-the-debugger)
+- [2026-10-21: Reading GPIOA with its clock off](#2026-10-21-reading-gpioa-with-its-clock-off)
+- [2026-10-21: Checking the Memory Inspector against known values](#2026-10-21-checking-the-memory-inspector-against-known-values)
+- [2026-10-22: Byte order in memory](#2026-10-22-byte-order-in-memory)
+- [2026-10-22: Reading RCC_PLLCFGR directly](#2026-10-22-reading-rcc_pllcfgr-directly)
+
+**SysTick and memory layout**
+
+- [2026-10-25: SysTick delay](#2026-10-25-systick-delay)
+- [2026-10-28: Where variables live](#2026-10-28-where-variables-live)
+
+**The logic analyzer**
+
+- [2026-11-02: Measuring LD2 with a logic analyzer](#2026-11-02-measuring-ld2-with-a-logic-analyzer)
+
+**The UART command shell**
+
+- [2026-11-04: USART2's clock and pins](#2026-11-04-usart2s-clock-and-pins)
+- [2026-11-05: A banner at 115200 baud](#2026-11-05-a-banner-at-115200-baud)
+- [2026-11-06: Echo](#2026-11-06-echo)
+- [2026-11-06: A line buffer and the first commands](#2026-11-06-a-line-buffer-and-the-first-commands)
+- [2026-11-06: The millis command](#2026-11-06-the-millis-command)
+- [2026-11-07: Bytes lost while the shell replies](#2026-11-07-bytes-lost-while-the-shell-replies)
+- [2026-11-09: Receiving by interrupt into a ring buffer](#2026-11-09-receiving-by-interrupt-into-a-ring-buffer)
+- [2026-11-10: Capturing the shell's frames](#2026-11-10-capturing-the-shells-frames)
+
+**I2C**
+
+- [2026-11-10: Wiring a CAP1188 and checking the I2C bus](#2026-11-10-wiring-a-cap1188-and-checking-the-i2c-bus)
+- [2026-11-13: I2C1's clock and pins](#2026-11-13-i2c1s-clock-and-pins)
+
 ## 2026-10-16: Toolchain and const placement
 
 ### Experiment setup
@@ -98,14 +138,6 @@ GPIOA_MODER = (GPIOA_MODER & ~GPIOA_MODER5_MASK)
 
 AND with the inverted mask: 0 clears bits 11:10, and 1 keeps every other bit. OR with the shifted value: 1 sets a bit, and 0 keeps it.
 
-### Mistakes and how they were caught
-
-1. **Wrong bit number.** I said GPIOAEN was bit 1. It is bit 0. Bit numbers start at 0 on the right, and the "0:" and "1:" lines under a field are values, not positions. Bit 1 is GPIOBEN, so the LED would have stayed dark with no error.
-2. **Wrong name.** My first draft named the RCC register `GPIOA`. Registers now use the manual's names, so anyone can search the manual and check the address.
-3. **A number, not a register.** `#define GPIOA_MODER 0x40020000u` makes the name a plain number, so assigning to it does not compile: GCC reports "lvalue required as left operand of assignment." A register define has to dereference a volatile pointer.
-4. **Macro without parentheses.** With `#define MASK 3u << 10`, `~MASK` expands to `(~3u) << 10`, which is 0xFFFFF000. That clears the fields for PA0 through PA5, not just PA5. At reset those fields are already 00, so the bug stays hidden until a pin from PA0 to PA4 is configured before this line runs.
-5. **Masked before shifting.** `(value & MASK) << 10` gives 0, because the mask sits at bit 10 and the value at bit 0. PA5 would have stayed an input. Shifting the value into position first, then masking, fixes it.
-
 ### Next
 
 - Find GPIOA_ODR's offset and write the statement that toggles PA5.
@@ -165,12 +197,6 @@ Debug build, flashed through the on-board ST-LINK: LD2 blinks. A phone stopwatch
 
 **Correction (2026-10-18):** a 60-second video of the same build counted 51 to 52 blinks, so a pass takes about 11.6 cycles at -O0, not 10. A 10-second count can't resolve that difference. See the 2026-10-18 entry.
 
-### Mistakes and confusions
-
-1. **Counting 1s instead of positions.** "Bit 5" is the sixth position from the right, counting from 0, whatever value it holds. My count landed right only because PA5 happened to be high.
-2. **Cycles vs passes.** I said half a second was 400,000 cycles and 400,000 passes. It's 8,000,000 cycles, and passes = cycles ÷ cycles per pass, so the two numbers can't match.
-3. **Two meanings of "cycle".** A clock cycle is one tick at 16 MHz. One on plus one off is a blink, or a period. The 8,000,000 clock cycles of one wait are all "on" or all "off", not split between them.
-
 Also learned: a comma can't go inside a C number. `3,200,000u` is three numbers, and in a loop condition it compiles silently and the loop runs zero times.
 
 ### Next steps: first blink
@@ -225,12 +251,9 @@ What each step showed:
 
 Also learned: in optimized code, the debugger's highlighted line jumps around. Instructions from different lines get reordered and merged, and a line whose work was removed never gets highlighted.
 
-### Mistakes and confusions
+### What the board caught
 
-1. **Same result, same speed.** For step 1, I first predicted the same rate, because the result stays the same. Time isn't part of the result, and making code faster is -O2's job.
-2. **Step 3 predicted from step 2.** I assumed the compiler would repeat step 2's countdown. It isn't bound to: C allowed deleting the loop both times.
-3. **Units in the chain.** I wrote that 800,000 passes take 60 seconds. That's one half-second wait. Writing the chain one row at a time fixed it: cycles per wait, then seconds per wait, then two waits per blink.
-4. **Half an answer, again.** "Too fast for the eye" isn't the whole picture. LD2 looks like a steady light, dimmer than fully on, because it's on only about half the time.
+1. **Step 3 predicted from step 2.** I assumed the compiler would repeat step 2's countdown. It isn't bound to: C allowed deleting the loop both times.
 
 ### Next steps: optimization
 
@@ -271,12 +294,6 @@ At the first point, GPIOA's clock should still be off. Several sources say an un
 
 **Answered (2026-10-21):** the chip answered the read without the clock. At the same stop, the Memory Inspector showed GPIOAEN at 0 and read GPIOA_MODER as 0xA8000000. See the 2026-10-21 entries.
 
-### Mistakes and confusions
-
-1. **Shifts written one place short.** I wrote `3u << 10` as 11 followed by nine zeros, which puts the field at bits 10:9. The setup line would then give 0xA8000200: PA5 stays an input, and PA4 becomes alternate function. `x << n` puts exactly n zeros to the right of x, because bit numbers start at 0.
-2. **`~` written at 11 bits.** `~` flips all 32 bits: `~(3u << 10)` is 0xFFFFF3FF. As an 11-bit pattern, the AND would clear everything above bit 10, including the debugger pins.
-3. **MODER 00 read as "off".** 00 is input mode. MODER holds the mode, and ODR holds the level, which only reaches the pin once MODER says output.
-
 ### Next steps: read-back
 
 - At the first stop, check GPIOAEN in RCC_AHB1ENR and read 0x40020000 through the Memory Inspector, to settle the open question.
@@ -316,13 +333,6 @@ Debug build (-O0), same main.c as 2026-10-20. I wrote the predictions down befor
 On this board, a debugger read of GPIOA_MODER works with GPIOA's clock off. Not tested: reads from my own code, writes with the clock off, and other registers and peripherals.
 
 One gap remained: a 0 from RCC_AHB1ENR can't tell a real read from a failed one. The next entry closes it.
-
-### Mistakes and confusions
-
-1. **A stored value in the wrong tool.** My first prediction gave "the pre-filled value from the document" as the reason for a Memory Inspector reading. Only the peripheral view might show a stored value. The Memory Inspector stores nothing.
-2. **Prediction and explanation didn't match.** In my first set, I predicted 0xA8000000 for GPIOA_MODER but picked explanation 3. With GPIOAEN at 0, a live 0xA8000000 is explanation 2. I redid the set before launching.
-3. **One register for the whole peripheral.** I asked whether RCC is always 0 after reset. RCC_AHB1ENR resets to 0, but each register has its own reset value: RCC_CR starts with its oscillator switched on. And not every reset touches the peripherals. A debugger can reset only the CPU core, which leaves them as they were.
-4. **The chip isn't the board.** The chip is the STM32F411RE. The NUCLEO-F411RE is the board around it: the chip, LD2, the buttons, the headers, and the ST-LINK, which has its own microcontroller and talks to the chip over SWD on PA13 and PA14.
 
 ## 2026-10-21: Checking the Memory Inspector against known values
 
@@ -365,15 +375,6 @@ All three matched.
 - GPIOA's four registers read their RM0383 reset values. On the previous run, with Length 4, the same row showed zeros where GPIOA_OSPEEDR and GPIOA_PUPDR read 0x0C000000 and 0x64000000 here. So the Memory Inspector fills a row past the requested Length with zeros that weren't read. Length counts bytes, and only the groups inside it count.
 
 Also learned: likely vs known. Something I reasoned out from the manual or from other readings is only likely. A reading that could have come out differently makes it known. Before this run, "those zeros were filler" was likely; the Length 16 read made it known.
-
-### Mistakes and confusions
-
-1. **The printed reset value as the live value.** My first prediction for RCC_CR was 0x0000XX81, the value as printed. A reset value is a snapshot at the instant of reset, and read-only status bits can change before any code runs.
-2. **The first group isn't offset 0.** I read "the first group" as the peripheral's first register. It's the register at the address I typed. At 0x40023830, group 1 is RCC_AHB1ENR, not RCC_CR.
-3. **Wrong stop, again.** For RCC_AHB1ENR at the second stop, I first gave the first stop's value. By then, the RCC line has set GPIOAEN.
-4. **A match that proves nothing.** I thought a 00000000 group at GPIOA_OTYPER might show a real read, since its reset value is 0. It can't: a real read and filler both show 0.
-5. **One reading vouching for another.** I said the second group of the RCC_CR row was a real read because the first group was. Each group answers for itself. That group is RCC_PLLCFGR, which resets to 0x2400 3010, and it showed 00000000, outside the 4 bytes I asked for. So it was almost certainly filler. A direct read of 0x40023804 would confirm it. **Confirmed (2026-10-22):** a direct read returned 0x24003010, so it was filler. See the 2026-10-22 entry on RCC_PLLCFGR.
-6. **Address vs value.** I said RCC_CR's address changed. Its address is fixed at 0x40023800; its value changed.
 
 ### Next steps: Memory Inspector
 
@@ -451,13 +452,6 @@ Each MAUs per Group change redrew the row on its own, using the current Group En
 
 The Load button also reads the 128 bytes at the addresses just before the one I typed. Some registers change when they're read, such as a UART's data register, so I only use it where nothing in that range does.
 
-### Mistakes and confusions
-
-1. **Number order written as the row.** I first wrote GPIOA_MODER's row as A8 00 00 00: the value split into bytes, biggest first, but not placed by address. That's step 1 of 2.
-2. **A hex digit taken for a byte.** For the byte holding PA5's field, I gave bits 11:8. That's one hex digit, 4 bits. The byte is two digits, bits 15:8.
-3. **No method for a byte's address.** I counted bytes from the wrong end and couldn't find a byte's address. Bytes count from the bits 7:0 end, and a byte's address is the register's address plus its number.
-4. **The display setting run as storing.** I predicted the Big Endian group as A8 00 04 00, the value's own byte order. Storing goes from a value into memory. The setting goes the other way: it starts from the bytes in memory and turns them back into a number.
-
 ### Next steps: byte order
 
 - Read RCC_PLLCFGR (0x40023804) directly, one byte per group and as one group under each setting. Its four bytes all differ, and a direct read settles whether the zero in the 2026-10-21 RCC_CR row was filler.
@@ -502,12 +496,6 @@ All three matched. After I set the gear back, Little Endian read 24003010 again.
 - A real read at 0x40023804 returns 0x24003010, not 0. So the 00000000 in the 2026-10-21 row was filler, and that's now known. This read could have come out 00000000, and it didn't.
 - RCC_PLLCFGR sits in memory as 10 30 00 24, with the byte holding bits 7:0 at the lowest address, like RCC_CR and GPIOA_MODER.
 - Little Endian gave the register's value, and Big Endian gave memory order, as with GPIOA_MODER.
-
-### Mistakes and confusions
-
-1. **Likely called known.** Before the read, I called the filler claim known, because the Memory Inspector had shown filler before. That was at GPIOA's addresses, in a different row. One reading can't vouch for another.
-2. **Group 2's address.** I didn't see how a read at 0x40023800 involved RCC_PLLCFGR at 0x40023804. At 4 bytes per group, group 2 starts 4 bytes after the address I typed.
-3. **The display setting run as storing, again.** I first predicted Little Endian as 10300024 and Big Endian as 24003010. My Big Endian rule, least significant byte at the highest address, was right, but I applied it to the value instead of to the bytes in memory. Applied to memory, the byte at the highest address, 24, goes last: 10300024.
 
 ### Next steps: direct read
 
@@ -587,13 +575,9 @@ Debug build (-O0) unless noted. The pragma build used `#pragma GCC optimize("O2"
 - The busy-wait gave 51 to 52 blinks per minute at -O0 and about 60 at -O2 (2026-10-18). SysTick gave 60 in both builds.
 - In the third run, the handler kept counting: 1,875 more ticks between the two pauses. `main` never saw them. Without `volatile`, the compiler can assume the counter doesn't change during the wait, so `millis() - start` stays 0 and the wait never ends. LD2 stayed on because the first XOR ran before the first wait. `volatile` went back in afterward.
 
-### Mistakes and confusions
+### What the board caught
 
-1. **RELOAD kept fixed.** For a 1 ms period, I first kept STK_LOAD at 3 and worked out how many 4-cycle periods fit in 1 ms. RELOAD is the setting I choose so that one period lasts the whole 16,000 cycles.
-2. **Off by one.** Then I put 16,000 in STK_LOAD. The count runs from 16,000 down to 0, which is 16,001 numbers, so every period would run one cycle long. The rule is RELOAD = cycles - 1.
-3. **volatile explained by its definition.** I said `volatile` "guarantees each read/write occurs." That's what it does, not why `elapsed_ms` needs it. The reason is that the handler changes it and `main` never calls the handler.
-4. **Keywords.** I wrote `volatile static`, but C calls a storage-class keyword anywhere but first obsolescent, so it's `static volatile`. I also put `static` on `millis()`, which would have made the read function private to main.c.
-5. **The skipped-write model.** For a flag set in a handler, I said the write "got skipped." The handler is kept, and its write lands in memory; what the optimizer drops is `main`'s re-reads. My prediction for the third run still assumed the counter wouldn't change, and the board showed it climbing.
+1. **The skipped-write model.** For a flag set in a handler, I said the write "got skipped." The handler is kept, and its write lands in memory; what the optimizer drops is `main`'s re-reads. My prediction for the third run still assumed the counter wouldn't change, and the board showed it climbing.
 
 ### Next steps: SysTick
 
@@ -631,11 +615,6 @@ I read both addresses in the Debug build (-O0): a breakpoint on the `while` line
 - `start` sits 20 bytes below the top of RAM, 0x20020000. In the -O0 code, `main` saves 8 bytes of registers, and `delay_ms` saves 8 more and reserves 16 for its locals, with `start` 12 bytes into those 16: 0x20020000 - 8 - 8 - 16 + 12 = 0x2001FFEC.
 - Both values read 0: the breakpoint hit before SysTick's first tick.
 
-### Mistakes and confusions
-
-1. **What instead of why.** I said `.data` values are stored in flash and copied to RAM, and that `elapsed_ms` is zero-initialized. The why: these variables change, so they live in RAM, and RAM holds nothing at power-up, so the starting values are kept in flash. For `.bss`, the startup loop writes the zeros itself, so there's nothing to keep.
-2. **Stack or heap.** I wasn't sure what decides it. The declaration does: a local without `static` goes on the stack, and only `malloc` puts anything on the heap. A pointer to a heap block is two things in two places: the pointer where it's declared, and the block on the heap.
-
 ### Next steps: memory layout
 
 - Find what takes the 440 bytes below `elapsed_ms` in the build's map file, `build/Debug/stm32f411_bare_metal.map`.
@@ -671,7 +650,7 @@ The program is the SysTick version from 2026-10-25, unchanged: the loop flips PA
 
 The HSI is the likely cause, not a proven one. Running the chip from a crystal-based clock would settle it: on MB1136 C-02 and later boards, the ST-LINK supplies a fixed 8 MHz clock (UM1724, section 6.7.1). My prediction for that run: 500.00 ms within about 0.1 ms, with little spread.
 
-### Mistakes and confusions
+### What the board caught
 
 1. **The sample rate as the limit.** I predicted the readings would get very close to 500.000 ms if the sample rate were high enough. The sample rate only decides how precisely the analyzer sees when PA5 flips. The board's clock decides when it flips, and that's where the difference from 500 ms came from.
 2. **A signal wire on an unpowered board.** With only the analyzer plugged in, connecting CH0 to D13 made LD2 glow faintly. With nothing attached, the analyzer's inputs read 1, probably through pull-up resistors inside it, and that fed a little current into PA5 and LD2. The signal wire goes on only while both are powered.
@@ -733,10 +712,9 @@ Debug build (-O0). I read the registers in the Memory Inspector at a breakpoint 
 - **The first RCC_APB1ENR reading was 0.** MODER and AFRL were right, and `usart2_init` writes them right after the RCC line, so the function had run and the RCC write had gone somewhere else. The line read `RCC_AHB1ENR |= RCC_APB1ENR_USART2EN;`. It set bit 17 of RCC_AHB1ENR, which is reserved, and RCC_APB1ENR's define was missing. It compiled because a mask is only a number: nothing but its name ties `RCC_APB1ENR_USART2EN` to its register. GPIO setup needs only GPIOA's clock, so the pins came out right either way.
 - In MODER, 0xA80004A0 puts 10 in both PA2's and PA3's fields and keeps PA5's 01. In AFRL, 0x00007700 is a 7 in PA3's field and a 7 in PA2's.
 
-### Mistakes and confusions
+### What the board caught
 
 1. **USART2's clock in the wrong register.** I wrote the enable as `RCC_AHB1ENR |= RCC_APB1ENR_USART2EN;` and never defined RCC_APB1ENR. My mask names start with their register's name, so in a `REG |= MASK` line the two prefixes should match. Here they didn't.
-2. **AFRL's fields.** I put a single 7 at bits 7:4, where MODER keeps PA2 and PA3 together. AFRL gives each pin its own 4 bits, PA2 at 11:8 and PA3 at 15:12, so the value is 0x00007700.
 
 ### Next steps: UART shell
 
@@ -808,12 +786,6 @@ Debug build (-O0). I read BRR and CR1 in the Memory Inspector at a breakpoint on
 
 - At 9600, the PC read each bit 12 times too slowly (115,200 ÷ 9,600), far past the few-percent tolerance, so it misread the bits.
 
-### Mistakes and confusions
-
-1. **Bytes per second.** I divided 115,200 by 8 and got 14,400. The start and stop bits are part of the 115,200, so each byte costs 10 bits: 11,520 bytes a second.
-2. **Drift over a whole message.** I thought a 0.1% clock error would build up over a 100-byte message, and that the receiver would re-read a missed bit. The receiver restarts its timing at every start bit, so drift builds up only within one frame. UART never re-reads or resends a bit: a misread bit just makes a wrong byte.
-3. **A fraction called a percent, and the wrong limit.** For BRR's error I wrote 0.0008%, but the fraction 0.0008 is 0.08%. Then I compared it with the HSI's 0.1% as if that were the limit. The two errors add, and the total is compared with the ±3.3% budget.
-
 ### Next steps: UART shell
 
 - Read what I type, and echo it back.
@@ -857,10 +829,6 @@ Debug build (-O0). I worked out the prediction before running the test.
 | Pause in the debugger, type `a`, press Continue | `a` appears after Continue | `a` appeared after Continue |
 
 - With the CPU halted, USART2 kept running. It received `a`, put it in DR, and set RXNE, and the byte waited there until the loop read it. ST's F411 header has debug bits that stop the timers, watchdogs, and RTC while the CPU is halted, and none for any USART.
-
-### Mistakes and confusions
-
-1. **"Everything pauses."** I predicted `a` would show up after Continue because everything was paused. The prediction was right but the reason wasn't: only the CPU pauses. If USART2 had paused too, `a` would never have arrived.
 
 ### Next steps: UART shell
 
@@ -952,10 +920,6 @@ Debug build (-O0). I worked out the predictions before running the tests.
 - The reply stopped at letter 31 because Enter wrote `\0` to `line[31]`, the array's last byte, and `usart2_write_string` stops at `\0`. The letters after the 31st were read from DR and stored nowhere, so nothing could bring them back.
 - The rest of the run: `help` printed `Commands: led, help`. A second `led` printed `LD2 OFF`, and LD2 went dark. `ld2 on` came back as `Unknown command: ld2 on`, because the space is stored like any letter and `strcmp` compares the whole line. Backspace fixed a typo.
 
-### Mistakes and confusions
-
-1. **`\0` as the end-of-line character.** I called it that. It's the null terminator, which ends the string. The line ends with the `\r` that Enter sends, and the loop writes `\0` when it sees `\r`.
-
 ### Next steps: UART shell
 
 - Add `millis`, which prints the milliseconds since reset.
@@ -1015,11 +979,6 @@ Debug build (-O0). I worked out the prediction before running the test.
 - The board counted 14 ms less than the stopwatch, about 0.14%. In the first 2026-11-02 capture the HSI ran about 0.1% slow, which would account for about 10 ms. But my Enter presses and stopwatch taps can be that far apart too, so this test can't separate the two. It shows that `millis` counts real milliseconds; the logic analyzer is still the way to measure the clock itself.
 - The rest of the run: `help` printed `Commands: led, help, millis`.
 
-### Mistakes and confusions
-
-1. **Thinking the `\0` gets sent.** I said `usart2_write_decimal(1050)` sends `1050\0`, with the `\0` marking the end. It sends 4 bytes. `usart2_write_string` tests `*str != '\0'` before its body, and only the body sends, so the loop stops at the `\0` without sending it: for `"ok"`, the test runs 3 times and the body twice. Lines end on the `\r\n` the code sends.
-2. **Sizing `text` by bits.** I didn't know where 4,294,967,295 came from. Then, for a `uint16_t`, I said `text` would need 17 bytes, counting its 16 bits as 16 digits, plus the `\0`. It holds decimal digits, one byte each, and the largest `uint16_t`, 65,535, has 5, so it needs 6 bytes. 17 would be right for printing in binary.
-
 ### Next steps: UART shell
 
 - Receive by interrupt into a ring buffer, so bytes aren't lost while the loop is busy.
@@ -1048,11 +1007,6 @@ Debug build (-O0). I worked out the predictions before running the test.
 - `h` landed in DR and waited there with RXNE set until the reply was out. Then the loop read it, stored it in `line` like any typed letter, and echoed it. The other 4 bytes each finished while `h` was unread, so none of them got into RDR; in the shift register, each new one wrote over the one before. The loop never saw them, so to the shell it looked as if I had typed `h`. At Enter, `line` was `h`, which matches no command.
 - `\r` was the last byte in, with nothing after it to write over it. If the hardware had moved it into RDR once `h` was read, the shell would have run `h` without my Enter. It didn't: a byte that arrives during an overrun is lost even when nothing comes after it.
 - `screen` didn't show the banner or the first prompt, because the board sent them before I opened it. No banner came after the printf, so the printf didn't restart the board.
-
-### Mistakes and confusions
-
-1. **Arriving and being read.** I said none of the second command's bytes would arrive while the loop was busy sending, because it wasn't reading. Arriving is the receiver's job, and it never waits for the CPU. Only reading waits for the loop. The echo step's pause test had already shown this: `a` arrived while the CPU was halted and waited in DR.
-2. **The lost bytes and the `\0`.** I said the lost bytes would be overwritten by the null terminator. The `\0` is in `line`, in RAM, and only the loop writes it, when it reads `\r`. The lost bytes never reached the loop: they were lost inside USART2, in the shift register.
 
 ### Next steps: UART shell
 
@@ -1165,10 +1119,9 @@ Debug build (-O0). I worked out the predictions before running the tests.
 - In the pause test the handler couldn't run while the CPU was halted, so `a` waited in DR, and `b` and `c` overran. On Continue the handler ran once, with RXNE and ORE both set. It stored `a` and counted one overrun.
 - `screen` showed the banner only in runs where I had pressed reset with it open, since the board sends the banner only at startup.
 
-### Mistakes and confusions
+### What the board caught
 
 1. **The overrun count.** I predicted 2, one each for `b` and `c`. It read 1. ORE is one flag, not a counter. `b` set it, and when `c` overran, it was already set. The handler ran once, found ORE once, and counted once. RM0383's note on overruns says ORE means "at least 1 data has been lost", so the flag can't say how many.
-2. **The ring and overruns.** I said the ring's size was why nothing would overrun. The ring only prevents drops, which happen when it's full. An overrun happens inside USART2, when a byte finishes while DR is still unread. What prevents it is the handler reading DR within one byte-time.
 
 ### Next steps: UART shell
 
@@ -1180,7 +1133,7 @@ Debug build (-O0). I worked out the predictions before running the tests.
 ### Setup
 
 - The logic analyzer from 2026-11-02, now on USART2's two wires, with PulseView's UART decoder at 115200 baud, 8 data bits, no parity, 1 stop bit.
-- I first put the two signal wires on CN10 pins 35 and 37, which UM1724's Table 29 names PA2 and PA3. Both read flat high while the shell was printing in the terminal (see Mistakes).
+- I first put the two signal wires on CN10 pins 35 and 37, which UM1724's Table 29 names PA2 and PA3. Both read flat high while the shell was printing in the terminal (see What the board caught).
 - The signals were on CN3, the 2-pin header on the ST-LINK part of the board. The channel on CN3's RX pin showed the banner after a reset, so the ST-LINK's RX is the board's TX (PA2). The other pin is PA3, which carries what the PC sends.
 - Wiring as used: D1 on PA2 (TX), D0 on PA3 (RX), and the analyzer's ground on CN5's GND socket. Both USB cables in and the ground on before the signal wires.
 - A frame is 10 bit times: a start bit (low), 8 data bits with the least significant first, and a stop bit (high). BRR is 139, so one bit time is 139 / 16 MHz = 8.6875 µs.
@@ -1242,7 +1195,7 @@ Result: all three held. The second command's 5 bytes arrive on RX under the `Com
 
 The PulseView sessions are in `captures/banner.sr` and `captures/two_commands.sr`.
 
-### Mistakes and confusions
+### What the board caught
 
 1. **CN10 pins 35 and 37.** Table 29 lists them as PA2 and PA3, but on my board both read flat high during traffic. To rule out my wiring, I put the same channel on CN10 pin 9 (GND), which read low, and on pin 11 (PA5), which followed LD2 as `led` toggled it. So the channel and my pin counting were fine, and the two pins carry no signal. The likely cause is that they sit behind solder bridges SB62 and SB63, which are open by default, like the D0 and D1 sockets. I haven't checked that in the schematic. CN3 worked without soldering.
 
@@ -1270,7 +1223,7 @@ The PulseView sessions are in `captures/banner.sr` and `captures/two_commands.sr
 Capture: 1 MHz, 5 M samples, with everything wired and powered and the shell running. The shell doesn't touch PB8 or PB9.
 
 - **VIN connected.** Prediction: both lines high, since nothing pulls them and the pull-ups hold them up. Result: both flat high.
-- **VIN pulled off the breakout.** Prediction: both lines low, since the pull-ups would have no supply. Result: both still flat high (see Mistakes).
+- **VIN pulled off the breakout.** Prediction: both lines low, since the pull-ups would have no supply. Result: both still flat high (see What the board caught).
 
 ### Pulling each line low from the board
 
@@ -1371,6 +1324,119 @@ Result: D1 went low at the first `sda` and came back high at the second. Then D0
 
 ![Each line pulled low and released from the board: SDA on D1 first, then SCL on D0](captures/bus_check.png)
 
-### Mistakes and confusions
+### What the board caught
 
 1. **Pulling VIN didn't bring the lines low.** I predicted both lines would read low with the breakout's VIN wire off, since the pull-ups would lose their supply. Both stayed flat high. An unpowered supply isn't 0 V. With nothing holding it there, it floats, and the lines float with it. This analyzer shows a floating input as high, the same as its unconnected channels. So that test couldn't tell a lead on the line from a loose one. Pulling each line low from the board could.
+
+## 2026-11-13: I2C1's clock and pins
+
+### Setup
+
+- This is the first half of an I2C driver written from the registers. It turns on I2C1's clock and hands PB8 and PB9 to I2C1. Setting up I2C1 itself, its timing and its enable, comes next.
+- The steps are USART2's from 2026-11-04, plus the output type. I2C's pins have to be open-drain, because every device on the bus only pulls a line low or lets it go (2026-11-10). USART2's TX pin kept OTYPER's reset value, push-pull.
+
+| Register | Address | What I set |
+| --- | --- | --- |
+| RCC_APB1ENR | 0x40023840 | I2C1EN (bit 21), I2C1's clock. I2C1 is on APB1, like USART2 (bit 17) |
+| RCC_AHB1ENR | 0x40023830 | GPIOBEN (bit 1), GPIOB's clock, as `bus_check_init()` did |
+| GPIOB_OTYPER | 0x40020404 | OT8 and OT9 to 1, open-drain, as `bus_check_init()` did |
+| GPIOB_AFRH | 0x40020424 | 4, I2C1's alternate function, in PB8's field (bits 3:0) and PB9's (bits 7:4). AFRH holds pins 8 to 15, 4 bits each, with pin n at bit `4 * (n - 8)`. The number comes from each pin's row in the datasheet's alternate function table (DS10314, Table 9) |
+| GPIOB_MODER | 0x40020400 | 10, alternate function, in PB8's field (bits 17:16) and PB9's (bits 19:18) |
+
+- MODER goes last, because it's the line that hands each pin to I2C1. Until it runs, PB8 and PB9 are inputs, and an input's output buffer is off (RM0383, 8.3.9), so OTYPER and AFRH can change without touching the bus. `usart2_init()` and `bus_check_init()` wrote MODER last too.
+- Each AFRH and MODER line clears the pin's field before ORing in the new value, because OR can only turn bits on. The clear matters whenever the new value has a 0 where the field might hold a 1. From output mode, 01, OR alone would turn PB8's field into 11, analog mode. OTYPER's new bits are single 1s, so `|=` alone sets them.
+- `bus_check_init()` became `i2c1_init()`, without its ODR line. In alternate function mode the peripheral drives the pin, not ODR (RM0383, 8.3.11). `scl` and `sda` stayed in for one run, to show that on the board.
+
+In the RCC block, I2C1's clock bit.
+
+```c
+#define RCC_APB1ENR_I2C1EN   (1u << 21)
+```
+
+After GPIOB's OTYPER bits, AFRH and I2C1's alternate function number.
+
+```c
+#define GPIOB_AFRH           (*(volatile uint32_t *)0x40020424u)
+#define GPIOB_AFRH8_POS      0u
+#define GPIOB_AFRH8_MASK     (0xFu << GPIOB_AFRH8_POS)
+#define GPIOB_AFRH9_POS      4u
+#define GPIOB_AFRH9_MASK     (0xFu << GPIOB_AFRH9_POS)
+#define GPIO_AF_I2C1         4u
+```
+
+The setup, in place of `bus_check_init()`, still called in `main` before `usart2_init()`.
+
+```c
+static void i2c1_init(void)
+{
+    RCC_APB1ENR |= RCC_APB1ENR_I2C1EN;
+    (void)RCC_APB1ENR; // same errata wait as GPIOA's
+    RCC_AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    (void)RCC_AHB1ENR; // same errata wait as GPIOA's
+
+    GPIOB_OTYPER |= GPIOB_OTYPER_OT8 | GPIOB_OTYPER_OT9;
+
+    GPIOB_AFRH = (GPIOB_AFRH & ~GPIOB_AFRH8_MASK)
+                | ((GPIO_AF_I2C1 << GPIOB_AFRH8_POS) & GPIOB_AFRH8_MASK);
+    GPIOB_AFRH = (GPIOB_AFRH & ~GPIOB_AFRH9_MASK)
+                | ((GPIO_AF_I2C1 << GPIOB_AFRH9_POS) & GPIOB_AFRH9_MASK);
+
+    // MODER last, so each pin switches to I2C1 only after its type and AF are set
+    GPIOB_MODER = (GPIOB_MODER & ~GPIOB_MODER8_MASK)
+                | ((GPIO_MODE_ALTERNATE << GPIOB_MODER8_POS) & GPIOB_MODER8_MASK);
+    GPIOB_MODER = (GPIOB_MODER & ~GPIOB_MODER9_MASK)
+                | ((GPIO_MODE_ALTERNATE << GPIOB_MODER9_POS) & GPIOB_MODER9_MASK);
+}
+```
+
+### The GPIO registers, read first
+
+Before writing AFRH, I went back over GPIOB's registers on the bus-check code from 2026-11-10. For each, I predicted the value, then read it at a stop. No code changed.
+
+| Date | Register | Stop | Predicted | Read |
+| --- | --- | --- | --- | --- |
+| 11-11 | GPIOB_ODR | `usart2_init();` highlighted, after `bus_check_init()` | 0x00000300 | 0x00000300 in the registers view, and 768 for `*(volatile uint32_t *)0x40020414u` in the Watch panel |
+| 11-12 | GPIOB_MODER | Between PB8's MODER line and PB9's | 0x00010280 | 0x00010280 |
+| 11-13 | GPIOB_ODR | Inside `scl`'s branch, after its XOR | 0x00000200 | 0x00000200, and IDR's bit 8 went from 1 to 0 |
+
+- 768 is 0x300. The Watch panel evaluated the define's own expression and matched the registers view, so the define reaches the register the view shows.
+- 0x00010280 is PB8's field at 01, output, and PB9's still at 00. The 0x280 is GPIOB's reset value, with PB3 and PB4 in alternate function for the debug port (RM0383, 8.3.1).
+- In output mode, ODR's 0 made PB8 pull SCL low, and IDR, which reads the pin, followed.
+
+### Results
+
+Debug build (-O0). I worked out the predictions before flashing. Stop 1 is a breakpoint on `usart2_init();` in `main`, so `i2c1_init()` has run and `usart2_init()` hasn't. Stop 2 is one Step Over later, with the banner line next.
+
+| Register | Stop | Predicted | Read |
+| --- | --- | --- | --- |
+| RCC_APB1ENR | 1 | 0x00200000 | 0x00200000 |
+| RCC_APB1ENR | 2 | 0x00220000 | 0x00220000 |
+| GPIOB_MODER | 1 | 0x000A0280 | 0x000A0280 |
+| GPIOB_OTYPER | 1 | 0x00000300 | 0x00000300 |
+| GPIOB_AFRH | 1 | 0x00000044 | 0x00000044 |
+
+All five matched.
+
+- At stop 1, only I2C1's bit is set, because `usart2_init()` hasn't run. The debugger starts every run with a hardware reset, so no bit is left over from the run before.
+- At stop 2, `usart2_init()`'s `|=` read the register first, so bit 21 stayed when bit 17 went in.
+- The A in 0x000A0280 is 1010, the 10 in PB9's field and the 10 in PB8's. The 0x280 for PB3 and PB4 stayed.
+- IDR's bits 8 and 9 both read 1 at stop 1. With the pins in alternate function mode and I2C1 not yet enabled, nothing pulled either line low.
+
+### ODR after the handover
+
+This is the 11-13 `scl` reading again, now with PB8 in alternate function mode. `scl` was still in the code, and ODR started at 0, since nothing had written it. I typed `scl` once, then paused.
+
+| Register | Before `scl` | After | Predicted |
+| --- | --- | --- | --- |
+| GPIOB_ODR | 0x00000000 | 0x00000100 | Bit 8 goes from 0 to 1 |
+| GPIOB_IDR, bit 8 | 1 | 1 | No change |
+
+- ODR took the write, but the pin didn't follow. IDR reads the pin itself, and its bit 8 stayed 1. In output mode on 11-13, the same command took it from 1 to 0.
+- The shell replied `SCL released`, because `scl` works out its reply from ODR, not from the pin. With the pins on I2C1, it would report pulls that never reach the line.
+
+So `scl` and `sda` came out of `run_command`, along with the three GPIOB_ODR defines, and their pin comments moved onto `GPIOB_MODER8_POS` and `GPIOB_MODER9_POS`. After the change, `help` printed `Commands: led, millis, help`, and `scl` printed `Unknown command: scl`.
+
+### Next steps: I2C
+
+- Set up I2C1 itself, with its timing for PCLK1 at 16 MHz (CR2's FREQ, CCR, and TRISE), then its enable, PE in CR1.
+- Read the CAP1188's three ID registers as a shell command, and capture the transfer with PulseView's I2C decoder.
